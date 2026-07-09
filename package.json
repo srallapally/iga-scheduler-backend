@@ -8,14 +8,15 @@
     "node": "22.x"
   },
   "scripts": {
-    "start": "node src/app.js",
+    "start": "node src/main.js",
+    "start:local": "APP_MODE=local node src/main.js",
+    "start:prod": "APP_MODE=production node src/main.js",
+    "dev": "node src/main.js",
     "test": "vitest run",
-    "dev": "node src/app.js",
+    "bootstrap": "node scripts/bootstrap.js",
     "bootstrap:es": "node scripts/bootstrap-es-indices.js",
-    "validate:production-config": "node scripts/validate-production-config.js",
     "migrate:up": "node-pg-migrate up --migrations-dir migrations",
-    "migrate:down": "node-pg-migrate down --migrations-dir migrations",
-    "start:local": "node src/app.local.js"
+    "migrate:down": "node-pg-migrate down --migrations-dir migrations"
   },
   "keywords": [],
   "author": "",

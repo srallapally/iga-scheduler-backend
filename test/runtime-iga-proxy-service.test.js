@@ -1,22 +1,25 @@
 import { describe, expect, it, vi } from "vitest";
 import { RuntimeIgaProxyService } from "../src/services/runtimeIgaProxyService.js";
 
-function createEsClient(run = { runId: "run-1", state: "RUNNING", definitionId: "def-1", instanceId: "inst-1" }) {
-  return {
-    get: vi.fn(async () => ({ _source: run })),
-    create: vi.fn(async () => ({ result: "created" }))
-  };
+function createRunStore(run = { runId: "run-1", state: "RUNNING", definitionId: "def-1", instanceId: "inst-1" }) {
+  return { getRun: vi.fn(async () => run ? { ...run } : null) };
+}
+
+function createEsClient() {
+  return { create: vi.fn(async () => ({ result: "created" })) };
 }
 
 function createService({ run, igaClient } = {}) {
-  const esClient = createEsClient(run);
+  const runStore = createRunStore(run);
+  const esClient = createEsClient();
   const client = igaClient || { request: vi.fn(async () => ({ ok: true, value: "iga-result" })) };
   return {
+    runStore,
     esClient,
     igaClient: client,
     service: new RuntimeIgaProxyService({
       esClient,
-      runsIndex: "runs",
+      runStore,
       auditIndex: "audit",
       igaClient: client,
       maxRequestBytes: 1024,
@@ -28,7 +31,7 @@ function createService({ run, igaClient } = {}) {
 
 describe("RuntimeIgaProxyService", () => {
   it("proxies an IGA request for a running run without exposing a token", async () => {
-    const { service, igaClient, esClient } = createService();
+    const { service, igaClient, esClient, runStore } = createService();
 
     const result = await service.request({
       runId: "run-1",
@@ -46,6 +49,7 @@ describe("RuntimeIgaProxyService", () => {
     expect(JSON.stringify(result)).not.toContain("Bearer");
     expect(JSON.stringify(result)).not.toContain("access-token");
     expect(igaClient.request).toHaveBeenCalledWith("GET", "/iga/governance/applications?_pageSize=1", undefined);
+    expect(runStore.getRun).toHaveBeenCalledWith("run-1");
     expect(esClient.create).toHaveBeenCalledTimes(2);
   });
 

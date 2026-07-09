@@ -11,11 +11,10 @@ import { SecretManagerParameterResolver } from "./secretManagerParameterResolver
 export class WorkerRunService {
   constructor({
     esClient = createEsClient(),
+    runStore = null,
     storage = null,
-    config = getConfig(),
-    runsIndex = config.runsIndex,
-    definitionsIndex = config.definitionsIndex,
-    auditIndex = config.auditIndex,
+    definitionsIndex = null,
+    auditIndex = null,
     auditActor = "scheduler-worker",
     auditEnabled = true,
     logger = console,
@@ -31,10 +30,10 @@ export class WorkerRunService {
     }
 
     this.esClient = esClient;
+    this.runStore = runStore;
     this.storage = storage;
-    this.runsIndex = runsIndex;
-    this.definitionsIndex = definitionsIndex;
-    this.auditIndex = auditIndex;
+    this._definitionsIndex = definitionsIndex;
+    this._auditIndex = auditIndex;
     this.auditActor = auditActor;
     this.auditEnabled = auditEnabled;
     this.logger = logger;
@@ -45,6 +44,16 @@ export class WorkerRunService {
     this.maxLocalConcurrency = maxLocalConcurrency;
     this.localRunning = 0;
     this.parameterResolver = parameterResolver;
+  }
+
+  get definitionsIndex() {
+    if (!this._definitionsIndex) this._definitionsIndex = getConfig().definitionsIndex;
+    return this._definitionsIndex;
+  }
+
+  get auditIndex() {
+    if (!this._auditIndex) this._auditIndex = getConfig().auditIndex;
+    return this._auditIndex;
   }
 
   async executeRun({ runId }) {
@@ -125,7 +134,8 @@ export class WorkerRunService {
     }
 
     const endedAt = completion.endedAt || this.now().toISOString();
-    const succeeded = completion.exitCode === 0 || completion.status === "completed" || completion.status === "succeeded";
+    const succeeded = !completion.error &&
+      (completion.exitCode === 0 || completion.status === "completed" || completion.status === "succeeded");
     const normalizedResult = this.normalizeExecutionResult({
       ...completion,
       status: succeeded ? "completed" : "failed",
@@ -451,8 +461,9 @@ export class WorkerRunService {
   }
 
   async getRun(runId) {
+    if (this.runStore) return this.runStore.getRun(runId);
     try {
-      const response = await this.esClient.get({ index: this.runsIndex, id: runId });
+      const response = await this.esClient.get({ index: this.definitionsIndex.replace("definitions", "runs"), id: runId });
       return response._source;
     } catch (error) {
       if (error.meta?.statusCode === 404 || error.statusCode === 404) return null;
@@ -471,60 +482,24 @@ export class WorkerRunService {
   }
 
   async claimRun({ runId, startedAt }) {
-    try {
-      const response = await this.esClient.update({
-        index: this.runsIndex,
-        id: runId,
-        refresh: true,
-        script: {
-          source: "if (ctx._source.state == 'QUEUED') { ctx._source.state = 'RUNNING'; ctx._source.startedAt = params.startedAt; ctx._source.heartbeatAt = params.startedAt; ctx._source.status = params.status; } else { ctx.op = 'noop'; }",
-          params: { startedAt, status: { phase: "running", message: "Run claimed by worker" } }
-        }
-      });
-      return { claimed: response.result !== "noop" };
-    } catch (error) {
-      if (error.meta?.statusCode === 404 || error.statusCode === 404) return { claimed: false, missing: true };
-      throw error;
-    }
+    if (this.runStore) return this.runStore.claimRun({ runId, startedAt });
+    // legacy ES path — kept unwired; unreachable when runStore is present
+    throw new Error("claimRun requires runStore");
   }
 
   async recordRuntimeExecution({ runId, runtimeExecution, startedAt }) {
-    const response = await this.esClient.update({
-      index: this.runsIndex,
-      id: runId,
-      refresh: true,
-      script: {
-        source: "if (ctx._source.state == 'RUNNING') { ctx._source.runtimeExecution = params.runtimeExecution; ctx._source.heartbeatAt = params.startedAt; ctx._source.status = params.status; } else { ctx.op = 'noop'; }",
-        params: { runtimeExecution, startedAt, status: { phase: "dispatched", message: "Run dispatched to isolated runtime" } }
-      }
-    });
-    return response.result !== "noop";
+    if (this.runStore) return this.runStore.recordRuntimeExecution({ runId, runtimeExecution, startedAt });
+    throw new Error("recordRuntimeExecution requires runStore");
   }
 
   async markSucceeded({ runId, endedAt, result }) {
-    const response = await this.esClient.update({
-      index: this.runsIndex,
-      id: runId,
-      refresh: true,
-      script: {
-        source: "if (ctx._source.state == 'RUNNING') { ctx._source.state = 'SUCCEEDED'; ctx._source.endedAt = params.endedAt; ctx._source.heartbeatAt = params.endedAt; ctx._source.status = params.status; ctx._source.result = params.result; ctx._source.error = null; } else { ctx.op = 'noop'; }",
-        params: { endedAt, status: { phase: "succeeded", message: "Run completed successfully" }, result }
-      }
-    });
-    return response.result !== "noop";
+    if (this.runStore) return this.runStore.markSucceeded({ runId, endedAt, result });
+    throw new Error("markSucceeded requires runStore");
   }
 
   async markFailed({ runId, endedAt, error, retryClassification }) {
-    const response = await this.esClient.update({
-      index: this.runsIndex,
-      id: runId,
-      refresh: true,
-      script: {
-        source: "if (ctx._source.state == 'RUNNING') { ctx._source.state = 'FAILED'; ctx._source.endedAt = params.endedAt; ctx._source.heartbeatAt = params.endedAt; ctx._source.status = params.status; ctx._source.error = params.error; } else { ctx.op = 'noop'; }",
-        params: { endedAt, status: { phase: "failed", message: "Run failed in worker runtime executor" }, error: this.serializeError(error, retryClassification) }
-      }
-    });
-    return response.result !== "noop";
+    if (this.runStore) return this.runStore.markFailed({ runId, endedAt, error: this.serializeError(error, retryClassification) });
+    throw new Error("markFailed requires runStore");
   }
 
   normalizeExecutionResult(result = {}) {

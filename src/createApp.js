@@ -7,16 +7,16 @@ import { createInternalRuntimeIgaRouter } from "./routes/internalRuntimeIga.js";
 import { createInternalSchedulerRouter } from "./routes/internalScheduler.js";
 import { createInternalWorkerRouter } from "./routes/internalWorker.js";
 
-export function createApp({ workerRunService, readiness = createDefaultReadiness(), internalIgaOptions = {}, internalRuntimeIgaOptions = {}, internalSchedulerOptions = {}, internalWorkerOptions = {} } = {}) {
+export function createApp({ workerRunService, runStore, readiness = createDefaultReadiness(), internalIgaOptions = {}, internalRuntimeIgaOptions = {}, internalSchedulerOptions = {}, internalWorkerOptions = {} } = {}) {
   const app = express();
   const cachedReadiness = { ...readiness };
 
   app.use(assignRequestId);
   app.use(express.json({ limit: "1mb" }));
   app.use("/internal/iga", createInternalIgaRouter(internalIgaOptions));
-  app.use("/internal/runtime/iga", createInternalRuntimeIgaRouter(internalRuntimeIgaOptions));
+  app.use("/internal/runtime/iga", createInternalRuntimeIgaRouter({ ...(runStore ? { serviceOptions: { runStore } } : {}), ...internalRuntimeIgaOptions }));
   app.use("/internal/scheduler", createInternalSchedulerRouter(internalSchedulerOptions));
-  app.use("/internal/job-runs", createInternalWorkerRouter({ ...internalWorkerOptions, ...(workerRunService ? { service: workerRunService } : {}) }));
+  app.use("/internal/job-runs", createInternalWorkerRouter({ ...internalWorkerOptions, ...(workerRunService ? { service: workerRunService } : {}), ...(runStore ? { runControl: { runStore } } : {}) }));
   app.get("/health", (_req, res) => {
     res.json({ status: "ok" });
   });

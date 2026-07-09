@@ -9,20 +9,10 @@ const ALLOWED_METHODS = new Set(["GET", "POST", "PUT", "PATCH", "DELETE"]);
 export class RuntimeIgaProxyService {
   constructor({
     esClient = createEsClient(),
-    config = getConfig(),
-    runsIndex = config.runsIndex,
-    auditIndex = config.auditIndex,
-    tokenManager = new TokenManager({
-      tokenEndpoint: process.env.IGA_TOKEN_ENDPOINT,
-      clientId: process.env.IGA_CLIENT_ID,
-      clientSecret: process.env.IGA_CLIENT_SECRET,
-      scope: process.env.IGA_TOKEN_SCOPE,
-      refreshSkewSeconds: Number(process.env.IGA_TOKEN_REFRESH_SKEW_SECONDS || 60)
-    }),
-    igaClient = new IgaClient({
-      baseUrl: process.env.IGA_BASE_URL,
-      tokenManager
-    }),
+    runStore = null,
+    runsIndex = null,
+    auditIndex = null,
+    igaClient = null,
     enabled = parseBoolean(process.env.RUNTIME_IGA_PROXY_ENABLED, true),
     maxRequestBytes = Number(process.env.RUNTIME_IGA_REQUEST_MAX_BYTES || 262144),
     maxResponseBytes = Number(process.env.RUNTIME_IGA_RESPONSE_MAX_BYTES || 1048576),
@@ -32,9 +22,10 @@ export class RuntimeIgaProxyService {
     now = () => new Date()
   } = {}) {
     this.esClient = esClient;
-    this.runsIndex = runsIndex;
-    this.auditIndex = auditIndex;
-    this.igaClient = igaClient;
+    this.runStore = runStore;
+    this._runsIndex = runsIndex;
+    this._auditIndex = auditIndex;
+    this._igaClient = igaClient;
     this.enabled = enabled;
     this.maxRequestBytes = maxRequestBytes;
     this.maxResponseBytes = maxResponseBytes;
@@ -42,6 +33,30 @@ export class RuntimeIgaProxyService {
     this.auditActor = auditActor;
     this.logger = logger;
     this.now = now;
+  }
+
+  get igaClient() {
+    if (!this._igaClient) {
+      const tokenManager = new TokenManager({
+        tokenEndpoint: process.env.IGA_TOKEN_ENDPOINT,
+        clientId: process.env.IGA_CLIENT_ID,
+        clientSecret: process.env.IGA_CLIENT_SECRET,
+        scope: process.env.IGA_TOKEN_SCOPE,
+        refreshSkewSeconds: Number(process.env.IGA_TOKEN_REFRESH_SKEW_SECONDS || 60)
+      });
+      this._igaClient = new IgaClient({ baseUrl: process.env.IGA_BASE_URL, tokenManager });
+    }
+    return this._igaClient;
+  }
+
+  get runsIndex() {
+    if (!this._runsIndex) this._runsIndex = getConfig().runsIndex;
+    return this._runsIndex;
+  }
+
+  get auditIndex() {
+    if (!this._auditIndex) this._auditIndex = getConfig().auditIndex;
+    return this._auditIndex;
   }
 
   async request({ runId, method, path, body, principal }) {
@@ -125,6 +140,7 @@ export class RuntimeIgaProxyService {
   }
 
   async getRun(runId) {
+    if (this.runStore) return this.runStore.getRun(runId);
     try {
       const response = await this.esClient.get({ index: this.runsIndex, id: runId });
       return response._source;

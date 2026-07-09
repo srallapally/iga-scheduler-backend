@@ -2,6 +2,34 @@
 
 Two sample jobs are provided in `examples/js/`. Each section below covers what the job does, how to package and deploy it, and how to trigger a run.
 
+## Common operations
+
+### List all job definitions
+
+```bash
+curl -s $BASE_URL/job-definitions \
+  -H "Authorization: Bearer $TOKEN" \
+  | jq .
+```
+
+### List all instances for a definition
+
+```bash
+curl -s $BASE_URL/job-definitions/<definitionId>/instances \
+  -H "Authorization: Bearer $TOKEN" \
+  | jq .
+```
+
+### Get a specific instance
+
+```bash
+curl -s $BASE_URL/job-instances/<instanceId> \
+  -H "Authorization: Bearer $TOKEN" \
+  | jq .
+```
+
+---
+
 ## Prerequisites
 
 All examples assume:

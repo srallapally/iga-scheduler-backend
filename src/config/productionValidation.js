@@ -28,5 +28,18 @@ export function validateProductionStartupConfig({ env = process.env } = {}) {
   if (env.RUNTIME_SERVICE_ACCOUNT_EMAIL === env.SCHEDULER_INVOKER_SERVICE_ACCOUNT_EMAIL) throw new Error("RUNTIME_SERVICE_ACCOUNT_EMAIL must be separate from the scheduler invoker service account");
   if (env.WORKER_RUNTIME_ISOLATION) throw new Error("WORKER_RUNTIME_ISOLATION is not a production isolation control; use WORKER_EXECUTION_MODE=isolated");
 
+  const dbEngine = env.DB_ENGINE;
+  if (!dbEngine) throw new Error("Missing required production environment variables: DB_ENGINE");
+
+  if (dbEngine === "cloud-sql") {
+    const missingDb = ["DB_INSTANCE_CONNECTION_NAME", "DB_USER", "DB_NAME"].filter((n) => !env[n]);
+    if (missingDb.length > 0) throw new Error(`Missing required production environment variables for DB_ENGINE=cloud-sql: ${missingDb.join(", ")}`);
+  } else if (dbEngine === "direct") {
+    if (!env.DATABASE_URL) throw new Error("Missing required production environment variables for DB_ENGINE=direct: DATABASE_URL");
+    if (!env.DB_ALLOW_DIRECT) throw new Error("DB_ENGINE=direct is not allowed in production without DB_ALLOW_DIRECT=true (use for AlloyDB Auth Proxy or other sidecar deployments)");
+  } else {
+    throw new Error(`unsupported DB_ENGINE: ${dbEngine}`);
+  }
+
   return { status: "ok" };
 }

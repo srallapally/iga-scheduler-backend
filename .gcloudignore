@@ -1,0 +1,26 @@
+# Node dependencies and generated output
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+coverage/
+.nyc_output/
+dist/
+build/
+
+# Local environment/config files
+.env
+.env.*
+!.env.example
+
+# Infrastructure/docs not needed by Cloud Run runtime
+terraform/
+docs/
+
+# Editor/OS noise
+.DS_Store
+.idea/
+.vscode/
+
+# Git metadata
+.git/

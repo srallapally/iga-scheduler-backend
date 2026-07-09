@@ -12,7 +12,9 @@
     "test": "vitest run",
     "dev": "node src/app.js",
     "bootstrap:es": "node scripts/bootstrap-es-indices.js",
-    "validate:production-config": "node scripts/validate-production-config.js"
+    "validate:production-config": "node scripts/validate-production-config.js",
+    "migrate:up": "node-pg-migrate up --migrations-dir migrations",
+    "migrate:down": "node-pg-migrate down --migrations-dir migrations"
   },
   "keywords": [],
   "author": "",
@@ -23,6 +25,7 @@
   },
   "dependencies": {
     "@elastic/elasticsearch": "^9.4.2",
+    "@google-cloud/cloud-sql-connector": "^1.4.0",
     "@google-cloud/secret-manager": "^6.1.0",
     "@google-cloud/storage": "^7.19.0",
     "@google-cloud/tasks": "^6.2.2",
@@ -30,6 +33,8 @@
     "cron-parser": "^5.5.0",
     "express": "^5.2.1",
     "multer": "^2.1.1",
+    "node-pg-migrate": "^7.9.1",
+    "pg": "^8.16.0",
     "uuid": "^14.0.0",
     "yauzl": "^3.3.2",
     "zod": "^4.4.3"

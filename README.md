@@ -1,6 +1,6 @@
 # IGA Scheduler Backend
 
-A GCP-hosted job scheduling backend. Manages job definitions, cron-scheduled instances, and individual job runs. The public API is secured with PingOne OAuth (client credentials + JWKS). Internal endpoints use Google OIDC.
+A GCP-hosted job scheduling backend. Manages job definitions, cron-scheduled instances, and individual job runs. The public API is secured with PingOne or PingOne Advanced Identity Cloud (AIC) OAuth (client credentials + JWKS). Internal endpoints use Google OIDC.
 
 ## Modes
 
@@ -11,7 +11,7 @@ A GCP-hosted job scheduling backend. Manages job definitions, cron-scheduled ins
 
 `npm start` reads `APP_MODE` from the environment (default: `production`).
 
-PingOne OAuth is active in both modes — you need a real PingOne environment and a valid token to call the public API.
+PingOne / PingOne AIC OAuth is active in both modes — you need a real PingOne or AIC environment and a valid token to call the public API.
 
 ## Quick start (local mode)
 
@@ -80,7 +80,7 @@ src/
 ├── config/                   Config loader + production validation
 ├── elasticsearch/            Index mapping definitions
 ├── iga/                      IGA API client + token manager
-├── middleware/               publicAuth (PingOne), internalAuth (Google OIDC)
+├── middleware/               publicAuth (PingOne/AIC), internalAuth (Google OIDC)
 ├── routes/                   Express routers (public + internal)
 ├── runtime/                  JobContext, parameters, result model
 ├── services/                 Tick, dispatch, worker, run control, proxy
@@ -124,7 +124,7 @@ Copy `.env.example` and fill in values. Never commit `.env`.
 
 | Variable | Purpose |
 |---|---|
-| `PUBLIC_API_ISSUER` | PingOne issuer URL (`https://auth.pingone.com/<env-id>/as`) |
+| `PUBLIC_API_ISSUER` | OAuth AS issuer. PingOne: `https://auth.pingone.com/<env-id>/as`. AIC: `https://<tenant>.forgeblocks.com/am/oauth2/realms/root/realms/<realm>` |
 | `PUBLIC_API_AUDIENCE` | Expected JWT audience |
 | `WORKER_OIDC_AUDIENCE` | Audience for `/internal/worker/*` calls |
 | `WORKER_INVOKER_SERVICE_ACCOUNT_EMAIL` | Service account allowed to invoke worker endpoints |

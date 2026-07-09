@@ -252,16 +252,48 @@ if (!igaClientSecret) {
   }
 }
 
-// ─── 6. PingOne JWKS endpoint ─────────────────────────────────────────────────
+// ─── 6. OAuth AS JWKS endpoint ────────────────────────────────────────────────
+// Supports PingOne and PingOne Advanced Identity Cloud (AIC / ForgeRock).
+// If PUBLIC_API_JWKS_URL is set, it is used directly.
+// Otherwise we try OIDC discovery (issuer/.well-known/openid-configuration) to
+// find jwks_uri — required for AIC realm URLs that don't follow the
+// /.well-known/jwks.json convention.
 
-header("6 / 6  PingOne JWKS");
+header("6 / 6  OAuth AS JWKS");
 
 const issuer = env("PUBLIC_API_ISSUER");
-const jwksUrl = env("PUBLIC_API_JWKS_URL") || (issuer ? `${issuer}/.well-known/jwks.json` : null);
+let jwksUrl = env("PUBLIC_API_JWKS_URL") || null;
 
-if (!jwksUrl) {
+if (!issuer) {
   warn("ping", "skipped — PUBLIC_API_ISSUER not set");
 } else {
+  if (!jwksUrl) {
+    const elapsed = stopwatch();
+    try {
+      const discoveryUrl = `${issuer}/.well-known/openid-configuration`;
+      const discoveryRes = await fetch(discoveryUrl);
+      if (discoveryRes.ok) {
+        const doc = await discoveryRes.json();
+        if (doc.jwks_uri) {
+          jwksUrl = doc.jwks_uri;
+          pass("ping", `OIDC discovery succeeded, jwks_uri resolved (${elapsed()})`);
+          dim(`  jwks_uri: ${jwksUrl}`);
+        } else {
+          warn("ping", "OIDC discovery doc has no jwks_uri — falling back to <issuer>/.well-known/jwks.json");
+          jwksUrl = `${issuer}/.well-known/jwks.json`;
+        }
+      } else {
+        warn("ping", `OIDC discovery returned HTTP ${discoveryRes.status} — falling back to <issuer>/.well-known/jwks.json`);
+        jwksUrl = `${issuer}/.well-known/jwks.json`;
+      }
+    } catch (e) {
+      warn("ping", `OIDC discovery failed (${e.message}) — falling back to <issuer>/.well-known/jwks.json`);
+      jwksUrl = `${issuer}/.well-known/jwks.json`;
+    }
+  } else {
+    dim(`  using explicit PUBLIC_API_JWKS_URL: ${jwksUrl}`);
+  }
+
   const elapsed = stopwatch();
   try {
     const res = await fetch(jwksUrl);

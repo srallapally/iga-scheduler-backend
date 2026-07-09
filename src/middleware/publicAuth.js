@@ -35,7 +35,8 @@ export function createPublicAuthMiddleware({
         }
       }
 
-      req.publicAuth = { claims, clientId: claims.client_id || claims.sub };
+      // client_id = PingOne; azp = PingOne AIC (ForgeRock); sub = fallback
+      req.publicAuth = { claims, clientId: claims.client_id || claims.azp || claims.sub };
       return next();
     } catch {
       return res.status(401).json({ error: "invalid bearer token" });
@@ -43,11 +44,42 @@ export function createPublicAuthMiddleware({
   };
 }
 
+// Fetches the OIDC discovery document to find jwks_uri.
+// Supports both PingOne (issuer/.well-known/jwks.json convention) and
+// PingOne Advanced Identity Cloud (ForgeRock), which publishes jwks_uri via
+// the standard openid-configuration discovery endpoint.
+// Falls back to <issuer>/.well-known/jwks.json if discovery is unavailable.
+export async function resolveJwksUrl(issuer) {
+  try {
+    const res = await fetch(`${issuer}/.well-known/openid-configuration`);
+    if (res.ok) {
+      const doc = await res.json();
+      if (doc.jwks_uri) return doc.jwks_uri;
+    }
+  } catch {
+    // network error or non-JSON — fall through
+  }
+  return `${issuer}/.well-known/jwks.json`;
+}
+
 export function createJoseVerifier({ issuer, audience, jwksUrl }) {
-  const discoveryUrl = jwksUrl || `${issuer}/.well-known/jwks.json`;
-  const JWKS = createRemoteJWKSet(new URL(discoveryUrl));
+  // When jwksUrl is explicit, initialise the JWKS set immediately (sync, preserves prior behaviour).
+  // When it is absent, defer to OIDC discovery on the first token verification so that
+  // PingOne AIC realm URLs (which publish jwks_uri in their discovery doc) work without
+  // requiring the operator to look up and hard-code the URL.
+  let jwksPromise = jwksUrl
+    ? Promise.resolve(createRemoteJWKSet(new URL(jwksUrl)))
+    : null;
+
+  function getJwks() {
+    if (!jwksPromise) {
+      jwksPromise = resolveJwksUrl(issuer).then((url) => createRemoteJWKSet(new URL(url)));
+    }
+    return jwksPromise;
+  }
 
   return async function verifyJoseToken(token) {
+    const JWKS = await getJwks();
     const { payload } = await jwtVerify(token, JWKS, { issuer, audience });
     return payload;
   };

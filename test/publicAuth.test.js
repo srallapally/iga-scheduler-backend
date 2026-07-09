@@ -1,7 +1,7 @@
 import express from "express";
 import request from "supertest";
 import { describe, expect, it, vi } from "vitest";
-import { createPublicAuthMiddleware, createJoseVerifier } from "../src/middleware/publicAuth.js";
+import { createPublicAuthMiddleware, createJoseVerifier, resolveJwksUrl } from "../src/middleware/publicAuth.js";
 
 function createApp(authMiddleware) {
   const app = express();
@@ -68,6 +68,22 @@ describe("publicAuth middleware", () => {
     expect(res.body.clientId).toBe("sub-client");
   });
 
+  it("uses azp as clientId (PingOne AIC access tokens)", async () => {
+    const verifyToken = vi.fn(async () => ({ azp: "aic-client", sub: "aic-client", scope: "scheduler:admin" }));
+    const app = createApp(createMiddleware({ verifyToken }));
+    const res = await request(app).get("/protected").set("authorization", "Bearer aic-token");
+    expect(res.status).toBe(200);
+    expect(res.body.clientId).toBe("aic-client");
+  });
+
+  it("prefers client_id over azp when both are present", async () => {
+    const verifyToken = vi.fn(async () => ({ client_id: "ping-client", azp: "aic-client", sub: "s" }));
+    const app = createApp(createMiddleware({ verifyToken }));
+    const res = await request(app).get("/protected").set("authorization", "Bearer token");
+    expect(res.status).toBe(200);
+    expect(res.body.clientId).toBe("ping-client");
+  });
+
   it("returns 403 when required scope is missing from token", async () => {
     const verifyToken = vi.fn(async () => ({ sub: "client-1", scope: "other:scope" }));
     const app = createApp(createMiddleware({ verifyToken, requiredScope: "scheduler:admin" }));
@@ -119,7 +135,7 @@ describe("publicAuth middleware", () => {
 });
 
 describe("createJoseVerifier (local JWKS integration test)", () => {
-  it("verifies a locally-signed JWT against a local JWKS", async () => {
+  it("verifies a locally-signed JWT against a local JWKS (explicit jwksUrl)", async () => {
     const { generateKeyPair, SignJWT, exportJWK } = await import("jose");
     const { alg, privateKey, publicKey } = await generateKeyPair("RS256").then(async (kp) => ({
       alg: "RS256",
@@ -143,7 +159,6 @@ describe("createJoseVerifier (local JWKS integration test)", () => {
       .setSubject("test-client")
       .sign(privateKey);
 
-    // Serve the JWKS via a tiny express app
     const jwksApp = express();
     jwksApp.get("/.well-known/jwks.json", (_req, res) => res.json(jwks));
     const jwksServer = await new Promise((resolve) => {
@@ -159,6 +174,109 @@ describe("createJoseVerifier (local JWKS integration test)", () => {
       expect(payload.scope).toBe("scheduler:admin");
     } finally {
       await new Promise((resolve) => jwksServer.close(resolve));
+    }
+  });
+
+  it("discovers jwks_uri from OIDC discovery document (AIC path)", async () => {
+    const { generateKeyPair, SignJWT, exportJWK } = await import("jose");
+    const { privateKey, publicKey } = await generateKeyPair("RS256");
+
+    const jwk = await exportJWK(publicKey);
+    jwk.kid = "aic-key-1";
+    jwk.alg = "RS256";
+    jwk.use = "sig";
+    const jwks = { keys: [jwk] };
+
+    // AIC-style: JWKS is at a path that doesn't match /.well-known/jwks.json
+    const aicApp = express();
+    aicApp.get("/.well-known/openid-configuration", (req, res) => {
+      const base = `http://localhost:${server.address().port}`;
+      res.json({ issuer: base, jwks_uri: `${base}/oauth2/realms/root/connect/jwk_uri` });
+    });
+    aicApp.get("/oauth2/realms/root/connect/jwk_uri", (_req, res) => res.json(jwks));
+    // Should NOT be called — discovery points elsewhere
+    aicApp.get("/.well-known/jwks.json", (_req, res) => res.status(404).end());
+
+    const server = await new Promise((resolve) => {
+      const s = aicApp.listen(0, () => resolve(s));
+    });
+
+    try {
+      const base = `http://localhost:${server.address().port}`;
+      const issuer = base;
+      const audience = "https://scheduler.test.local";
+
+      const token = await new SignJWT({ azp: "aic-oauth-client" })
+        .setProtectedHeader({ alg: "RS256", kid: "aic-key-1" })
+        .setIssuer(issuer)
+        .setAudience(audience)
+        .setExpirationTime("1h")
+        .setSubject("aic-oauth-client")
+        .sign(privateKey);
+
+      // No jwksUrl supplied — must be discovered
+      const verifyToken = createJoseVerifier({ issuer, audience });
+      const payload = await verifyToken(token);
+      expect(payload.azp).toBe("aic-oauth-client");
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+});
+
+describe("resolveJwksUrl", () => {
+  it("returns jwks_uri from OIDC discovery when available", async () => {
+    const app = express();
+    const server = await new Promise((resolve) => {
+      const s = app.listen(0, () => resolve(s));
+    });
+    const base = `http://localhost:${server.address().port}`;
+    const expectedJwksUri = `${base}/am/oauth2/realms/root/connect/jwk_uri`;
+    app.get("/.well-known/openid-configuration", (_req, res) =>
+      res.json({ issuer: base, jwks_uri: expectedJwksUri })
+    );
+
+    try {
+      const result = await resolveJwksUrl(base);
+      expect(result).toBe(expectedJwksUri);
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+
+  it("falls back to <issuer>/.well-known/jwks.json when discovery returns no jwks_uri", async () => {
+    const app = express();
+    app.get("/.well-known/openid-configuration", (_req, res) => res.json({ issuer: "https://fallback.test" }));
+    const server = await new Promise((resolve) => {
+      const s = app.listen(0, () => resolve(s));
+    });
+    const base = `http://localhost:${server.address().port}`;
+    try {
+      const result = await resolveJwksUrl(base);
+      expect(result).toBe(`${base}/.well-known/jwks.json`);
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+
+  it("falls back to <issuer>/.well-known/jwks.json when discovery endpoint is unreachable", async () => {
+    const issuer = "http://127.0.0.1:1"; // nothing listening here
+    const result = await resolveJwksUrl(issuer);
+    expect(result).toBe(`${issuer}/.well-known/jwks.json`);
+  });
+
+  it("falls back to <issuer>/.well-known/jwks.json when discovery returns non-200", async () => {
+    const app = express();
+    app.get("/.well-known/openid-configuration", (_req, res) => res.status(404).end());
+    const server = await new Promise((resolve) => {
+      const s = app.listen(0, () => resolve(s));
+    });
+    const base = `http://localhost:${server.address().port}`;
+    try {
+      const result = await resolveJwksUrl(base);
+      expect(result).toBe(`${base}/.well-known/jwks.json`);
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
     }
   });
 });

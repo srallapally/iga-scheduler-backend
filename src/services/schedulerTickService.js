@@ -1,77 +1,65 @@
 import { CronExpressionParser } from "cron-parser";
-import { getConfig } from "../config/index.js";
 import { buildRunId } from "../utils/runId.js";
 
 export class SchedulerTickService {
-  constructor({ esClient, cloudTaskService, now = () => new Date(), batchSize = 100, config = getConfig(), indices = { instances: config.instancesIndex, runs: config.runsIndex } } = {}) {
-    if (!esClient) throw new Error("esClient is required");
-    if (!cloudTaskService) throw new Error("cloudTaskService is required");
-    this.esClient = esClient;
-    this.cloudTaskService = cloudTaskService;
+  constructor({ instanceStore, runStore, pool, now = () => new Date(), batchSize = 100 } = {}) {
+    if (!instanceStore) throw new Error("instanceStore is required");
+    if (!runStore) throw new Error("runStore is required");
+    if (!pool) throw new Error("pool is required");
+    this.instanceStore = instanceStore;
+    this.runStore = runStore;
+    this.pool = pool;
     this.now = now;
     this.batchSize = batchSize;
-    this.indices = indices;
   }
 
-  async tick({ dryRun = false, enqueue = true, batchSize = this.batchSize } = {}) {
+  async tick({ dryRun = false, batchSize = this.batchSize } = {}) {
     const nowDate = this.now();
     const nowIso = nowDate.toISOString();
-    const instances = await this.findDueInstances({ nowIso, batchSize });
-    const summary = { status: "ok", checked: instances.length, createdRuns: 0, duplicates: 0, enqueued: 0, advanced: 0, failed: 0, dryRun, enqueue };
+    const summary = { status: "ok", checked: 0, createdRuns: 0, duplicates: 0, enqueued: 0, advanced: 0, failed: 0, dryRun, enqueue: false };
 
-    for (const instance of instances) {
-      const result = await this.processInstance({ instance, nowIso, dryRun, enqueue });
-      summary.createdRuns += result.createdRuns;
-      summary.duplicates += result.duplicates;
-      summary.enqueued += result.enqueued;
-      summary.advanced += result.advanced;
-      summary.failed += result.failed;
+    if (dryRun) {
+      const instances = await this.instanceStore.claimDueInstances(this.pool, { nowIso, batchSize, forUpdate: false });
+      summary.checked = instances.length;
+      return summary;
+    }
+
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const instances = await this.instanceStore.claimDueInstances(client, { nowIso, batchSize });
+      summary.checked = instances.length;
+
+      for (let i = 0; i < instances.length; i++) {
+        const instance = instances[i];
+        const sp = `sp_${i}`;
+        await client.query(`SAVEPOINT ${sp}`);
+        try {
+          const scheduledFireTime = instance.nextFireAt;
+          // compute next fire first — cron parse errors abort this instance before any writes
+          const nextFireAt = this.computeNextFireAt({ expression: this.getCronExpression(instance.schedule), timezone: instance.schedule?.timezone, scheduledFireTime });
+          const runId = buildRunId({ tenantId: instance.tenantId, instanceId: instance.instanceId, scheduledFireTime });
+          const runDoc = this.buildRunDocument({ runId, instance, scheduledFireTime, nowIso });
+          const { created } = await this.runStore.createRunTx(client, runDoc);
+          if (created) { summary.createdRuns++; } else { summary.duplicates++; }
+          await this.instanceStore.advanceInstance(client, { instanceId: instance.instanceId, lastFireAt: scheduledFireTime, nextFireAt, nowIso });
+          summary.advanced++;
+          await client.query(`RELEASE SAVEPOINT ${sp}`);
+        } catch (err) {
+          await client.query(`ROLLBACK TO SAVEPOINT ${sp}`);
+          summary.failed++;
+        }
+      }
+
+      await client.query("COMMIT");
+    } catch (err) {
+      await client.query("ROLLBACK");
+      throw err;
+    } finally {
+      client.release();
     }
 
     return summary;
-  }
-
-  async findDueInstances({ nowIso, batchSize }) {
-    const response = await this.esClient.search({ index: this.indices.instances, size: batchSize, sort: [{ nextFireAt: { order: "asc" } }], query: { bool: { filter: [{ term: { enabled: true } }, { term: { state: "ACTIVE" } }, { range: { nextFireAt: { lte: nowIso } } }] } } });
-    return (response.hits?.hits || []).map((hit) => ({ _id: hit._id, ...hit._source }));
-  }
-
-  async processInstance({ instance, nowIso, dryRun, enqueue }) {
-    const scheduledFireTime = instance.nextFireAt;
-    const runId = buildRunId({ tenantId: instance.tenantId, instanceId: instance.instanceId, scheduledFireTime });
-    const runDocument = this.buildRunDocument({ runId, instance, scheduledFireTime, nowIso });
-    const result = { createdRuns: 0, duplicates: 0, enqueued: 0, advanced: 0, failed: 0 };
-
-    if (!dryRun) {
-      try {
-        await this.esClient.create({ index: this.indices.runs, id: runId, document: runDocument, refresh: true });
-        result.createdRuns = 1;
-      } catch (error) {
-        if (this.isConflict(error)) {
-          result.duplicates = 1;
-          await this.advanceInstance({ instance, scheduledFireTime, nowIso });
-          result.advanced = 1;
-          return result;
-        }
-        throw error;
-      }
-
-      if (enqueue) {
-        try {
-          await this.cloudTaskService.enqueueRun({ runId });
-          result.enqueued = 1;
-        } catch (error) {
-          result.failed = 1;
-          await this.markRunDispatchFailed({ runId, error, nowIso });
-          return result;
-        }
-      }
-
-      await this.advanceInstance({ instance, scheduledFireTime, nowIso });
-      result.advanced = 1;
-    }
-
-    return result;
   }
 
   buildRunDocument({ runId, instance, scheduledFireTime, nowIso }) {
@@ -96,11 +84,6 @@ export class SchedulerTickService {
     };
   }
 
-  async advanceInstance({ instance, scheduledFireTime, nowIso }) {
-    const nextFireAt = this.computeNextFireAt({ expression: this.getCronExpression(instance.schedule), timezone: instance.schedule?.timezone, scheduledFireTime });
-    await this.esClient.update({ index: this.indices.instances, id: instance.instanceId, doc: { lastFireAt: scheduledFireTime, nextFireAt, updatedAt: nowIso }, refresh: true });
-  }
-
   getCronExpression(schedule) { return schedule?.expression || schedule?.cron; }
 
   computeNextFireAt({ expression, timezone, scheduledFireTime }) {
@@ -108,10 +91,4 @@ export class SchedulerTickService {
     const interval = CronExpressionParser.parse(expression, { currentDate: new Date(scheduledFireTime), tz: timezone || "UTC" });
     return interval.next().toDate().toISOString();
   }
-
-  async markRunDispatchFailed({ runId, error, nowIso }) {
-    await this.esClient.update({ index: this.indices.runs, id: runId, doc: { state: "FAILED", endedAt: nowIso, error: { code: "DISPATCH_FAILED", message: error.message } }, refresh: true });
-  }
-
-  isConflict(error) { return error?.meta?.statusCode === 409 || error?.statusCode === 409; }
 }

@@ -81,12 +81,38 @@ export class RunStore {
     return rows.length ? rowToDocument(rows[0]) : null;
   }
 
+  async createRunTx(client, document) {
+    const row = documentToRow(document);
+    const cols = Object.keys(row);
+    const vals = cols.map((_, i) => `$${i + 1}`);
+    const { rowCount } = await client.query(
+      `INSERT INTO job_runs (${cols.join(", ")}) VALUES (${vals.join(", ")}) ON CONFLICT (run_id) DO NOTHING`,
+      cols.map((c) => row[c])
+    );
+    return { created: rowCount === 1 };
+  }
+
   async listQueuedRunIds({ limit = 100 } = {}) {
     const { rows } = await this.pool.query(
       "SELECT run_id FROM job_runs WHERE state = 'QUEUED' ORDER BY created_at LIMIT $1",
       [limit]
     );
     return rows.map((r) => r.run_id);
+  }
+
+  async listRunsForInstance({ instanceId, limit = 50, state } = {}) {
+    if (state) {
+      const { rows } = await this.pool.query(
+        "SELECT * FROM job_runs WHERE instance_id = $1 AND state = $2 ORDER BY created_at DESC LIMIT $3",
+        [instanceId, state, limit]
+      );
+      return rows.map(rowToDocument);
+    }
+    const { rows } = await this.pool.query(
+      "SELECT * FROM job_runs WHERE instance_id = $1 ORDER BY created_at DESC LIMIT $2",
+      [instanceId, limit]
+    );
+    return rows.map(rowToDocument);
   }
 }
 

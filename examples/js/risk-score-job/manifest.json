@@ -1,5 +1,5 @@
 {
   "entrypoint": "job.js",
-  "runtime": "node22",
+  "runtime": "javascript",
   "wrapperVersion": "1"
 }

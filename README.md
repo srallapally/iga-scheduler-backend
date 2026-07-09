@@ -124,7 +124,7 @@ Copy `.env.example` and fill in values. Never commit `.env`.
 
 | Variable | Purpose |
 |---|---|
-| `PUBLIC_API_ISSUER` | OAuth AS issuer. PingOne: `https://auth.pingone.com/<env-id>/as`. AIC: `https://<tenant>.forgeblocks.com/am/oauth2/realms/root/realms/<realm>` |
+| `PUBLIC_API_ISSUER` | OAuth AS issuer — see **Choosing an authorization server** below |
 | `PUBLIC_API_AUDIENCE` | Expected JWT audience |
 | `WORKER_OIDC_AUDIENCE` | Audience for `/internal/worker/*` calls |
 | `WORKER_INVOKER_SERVICE_ACCOUNT_EMAIL` | Service account allowed to invoke worker endpoints |
@@ -150,6 +150,32 @@ Copy `.env.example` and fill in values. Never commit `.env`.
 | `IGA_CLIENT_ID` | IGA client ID |
 | `IGA_CLIENT_SECRET` | IGA client secret (or Secret Manager reference) |
 | `IGA_BASE_URL` | IGA API base URL |
+
+## Choosing an authorization server
+
+Set `PUBLIC_API_ISSUER` to the issuer URL of whichever product your organization has licensed. The middleware auto-discovers the JWKS URL via OIDC discovery (`<issuer>/.well-known/openid-configuration`) — no additional configuration is needed for either product.
+
+**PingOne (classic)**
+
+Your organization has PingOne if the admin console is at `console.pingone.com`. The issuer URL is:
+
+```
+PUBLIC_API_ISSUER=https://auth.pingone.com/<env-id>/as
+```
+
+**PingOne Advanced Identity Cloud (AIC)**
+
+AIC is the SaaS-hosted evolution of ForgeRock Identity Cloud. Your organization has AIC if the admin console is at `<tenant>.forgeblocks.com` (or a custom domain). Issuer URLs contain `/am/oauth2/` in the path:
+
+```
+PUBLIC_API_ISSUER=https://<tenant>.forgeblocks.com/am/oauth2/realms/root/realms/<realm>
+```
+
+AIC publishes `jwks_uri` in its OIDC discovery document at a path that differs from the PingOne convention, which is why OIDC discovery is used instead of guessing the JWKS URL. If you are unsure which realm to use, check the OAuth 2.0 provider configuration in the AIC admin console under **Realms → \<realm\> → Services → OAuth2 Provider**.
+
+**Overriding the JWKS URL**
+
+In either case, set `PUBLIC_API_JWKS_URL` only if you need to point at a non-standard JWKS endpoint. When set, discovery is skipped entirely.
 
 ## Production bootstrap
 

@@ -165,13 +165,18 @@ PUBLIC_API_ISSUER=https://auth.pingone.com/<env-id>/as
 
 **PingOne Advanced Identity Cloud (AIC)**
 
-AIC is the SaaS-hosted evolution of ForgeRock Identity Cloud. Your organization has AIC if the admin console is at `<tenant>.forgeblocks.com` (or a custom domain). Issuer URLs contain `/am/oauth2/` in the path:
+AIC is the SaaS-hosted evolution of ForgeRock Identity Cloud. Your organization has AIC if the admin console is at `<tenant>.forgeblocks.com` (or a custom domain). The issuer is the realm's OAuth 2.0 base URL:
 
 ```
-PUBLIC_API_ISSUER=https://<tenant>.forgeblocks.com/am/oauth2/realms/root/realms/<realm>
+PUBLIC_API_ISSUER=https://<tenant>.forgeblocks.com/am/oauth2/<realm>
 ```
 
-AIC publishes `jwks_uri` in its OIDC discovery document at a path that differs from the PingOne convention, which is why OIDC discovery is used instead of guessing the JWKS URL. If you are unsure which realm to use, check the OAuth 2.0 provider configuration in the AIC admin console under **Realms → \<realm\> → Services → OAuth2 Provider**.
+For example, for the `alpha` realm:
+```
+PUBLIC_API_ISSUER=https://openam-example.forgeblocks.com/am/oauth2/alpha
+```
+
+The OIDC discovery document is at `<issuer>/.well-known/openid-configuration` — e.g. `https://openam-example.forgeblocks.com/am/oauth2/alpha/.well-known/openid-configuration`. AIC publishes `jwks_uri` there at a path that differs from the PingOne convention, which is why OIDC discovery is used. If you are unsure of the realm name, check the OAuth 2.0 provider configuration in the AIC admin console under **Realms → \<realm\> → Services → OAuth2 Provider**.
 
 **Overriding the JWKS URL**
 

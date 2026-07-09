@@ -3,6 +3,12 @@
 // Exit 0 = all checks passed. Exit 1 = one or more checks failed.
 // Safe to run standalone: node scripts/prod/preflight.js
 //
+// ES_ENDPOINT / ES_API_KEY / GCP_PROJECT_ID can be supplied as CLI flags when
+// they are not already in the environment:
+//   --es-endpoint <url>   seeds ES_ENDPOINT
+//   --es-api-key  <key>   seeds ES_API_KEY
+//   --gcp-project <id>    seeds GCP_PROJECT_ID
+//
 // Checks performed:
 //   1. Required env vars present and semantically valid
 //   2. Elasticsearch reachable and API key has sufficient permissions
@@ -11,7 +17,9 @@
 //   5. Secret Manager API reachable (if IGA_CLIENT_SECRET looks like a SM resource name)
 //   6. PingOne JWKS endpoint reachable
 
-import { ok, fail, warn, header, dim, requireEnv, env, stopwatch } from "./lib.js";
+import { ok, fail, warn, header, dim, requireEnv, env, stopwatch, applyCliDefaults } from "./lib.js";
+
+applyCliDefaults();
 
 let failures = 0;
 

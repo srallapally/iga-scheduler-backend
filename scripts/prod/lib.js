@@ -73,6 +73,39 @@ export async function confirm(question) {
   });
 }
 
+// ─── CLI defaults (prod mode only) ───────────────────────────────────────────
+//
+// If APP_MODE != "local" and a var is absent from the environment, seed it from
+// the corresponding CLI flag.  Env vars always win; CLI flags are a fallback.
+//
+// Supported flags:
+//   --es-api-key   <key>    → ES_API_KEY
+//   --es-endpoint  <url>    → ES_ENDPOINT
+//   --gcp-project  <id>     → GCP_PROJECT_ID
+
+export function applyCliDefaults(argv = process.argv.slice(2)) {
+  if ((process.env.APP_MODE || "production") === "local") return;
+
+  const flag = (name) => {
+    for (let i = 0; i < argv.length; i++) {
+      if (argv[i].startsWith(`--${name}=`)) return argv[i].slice(`--${name}=`.length);
+      if (argv[i] === `--${name}` && argv[i + 1] && !argv[i + 1].startsWith("--")) return argv[i + 1];
+    }
+    return null;
+  };
+
+  for (const [envVar, cliFlag] of [
+    ["ES_API_KEY",     "es-api-key"],
+    ["ES_ENDPOINT",    "es-endpoint"],
+    ["GCP_PROJECT_ID", "gcp-project"],
+  ]) {
+    if (!process.env[envVar]) {
+      const val = flag(cliFlag);
+      if (val) process.env[envVar] = val;
+    }
+  }
+}
+
 // ─── timing ──────────────────────────────────────────────────────────────────
 
 export function stopwatch() {

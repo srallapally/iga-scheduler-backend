@@ -12,6 +12,12 @@
 //   node scripts/prod/bootstrap-prod.js --skip-preflight   # skip phase 1 (not recommended)
 //   node scripts/prod/bootstrap-prod.js --dry-run          # phases 1+4 only, no writes
 //
+// ES_ENDPOINT / ES_API_KEY / GCP_PROJECT_ID can be supplied as CLI flags when
+// they are not already in the environment (env vars always take precedence):
+//   --es-endpoint <url>   seeds ES_ENDPOINT
+//   --es-api-key  <key>   seeds ES_API_KEY
+//   --gcp-project <id>    seeds GCP_PROJECT_ID
+//
 // Idempotent: existing ES indices and applied PG migrations are left unchanged.
 // On success writes bootstrap-manifest.json which teardown.js uses for cleanup.
 
@@ -20,8 +26,10 @@ import path from "path";
 import {
   ok, fail, warn, header, dim,
   REPO_ROOT, MIGRATIONS_DIR, MANIFEST_PATH,
-  writeManifest, readManifest, stopwatch
+  writeManifest, readManifest, stopwatch, applyCliDefaults
 } from "./lib.js";
+
+applyCliDefaults();
 
 const args = process.argv.slice(2);
 const DRY_RUN = args.includes("--dry-run");

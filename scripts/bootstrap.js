@@ -7,6 +7,12 @@
 //   node scripts/bootstrap.js --es-only    # only create ES indices
 //   node scripts/bootstrap.js --pg-only    # only run Postgres migrations
 //   node scripts/bootstrap.js --dry-run    # print what would happen, no writes
+//
+// In production mode, ES_ENDPOINT / ES_API_KEY / GCP_PROJECT_ID can be supplied
+// as CLI flags if they are not already in the environment:
+//   --es-endpoint <url>   seeds ES_ENDPOINT
+//   --es-api-key  <key>   seeds ES_API_KEY
+//   --gcp-project <id>    seeds GCP_PROJECT_ID
 
 import { createEsClient } from "../src/clients/esClient.js";
 import { createPgPool } from "../src/clients/pgClient.js";
@@ -24,6 +30,27 @@ const ES_ONLY = args.includes("--es-only");
 const PG_ONLY = args.includes("--pg-only");
 
 const mode = process.env.APP_MODE || "production";
+
+// Seed ES_API_KEY / ES_ENDPOINT / GCP_PROJECT_ID from CLI flags when not in env
+if (mode !== "local") {
+  const flag = (name) => {
+    for (let i = 0; i < args.length; i++) {
+      if (args[i].startsWith(`--${name}=`)) return args[i].slice(`--${name}=`.length);
+      if (args[i] === `--${name}` && args[i + 1] && !args[i + 1].startsWith("--")) return args[i + 1];
+    }
+    return null;
+  };
+  for (const [envVar, cliFlag] of [
+    ["ES_API_KEY",     "es-api-key"],
+    ["ES_ENDPOINT",    "es-endpoint"],
+    ["GCP_PROJECT_ID", "gcp-project"],
+  ]) {
+    if (!process.env[envVar]) {
+      const val = flag(cliFlag);
+      if (val) process.env[envVar] = val;
+    }
+  }
+}
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 

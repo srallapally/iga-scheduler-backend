@@ -179,11 +179,12 @@ describe("createJoseVerifier (local JWKS integration test)", () => {
 
   it("discovers jwks_uri from OIDC discovery document (AIC path)", async () => {
     const { generateKeyPair, SignJWT, exportJWK } = await import("jose");
-    const { privateKey, publicKey } = await generateKeyPair("RS256");
+    // AIC signs with PS256 — verify the middleware accepts it via header-driven alg
+    const { privateKey, publicKey } = await generateKeyPair("PS256");
 
     const jwk = await exportJWK(publicKey);
     jwk.kid = "aic-key-1";
-    jwk.alg = "RS256";
+    jwk.alg = "PS256";
     jwk.use = "sig";
     const jwks = { keys: [jwk] };
 
@@ -207,7 +208,7 @@ describe("createJoseVerifier (local JWKS integration test)", () => {
       const audience = "https://scheduler.test.local";
 
       const token = await new SignJWT({ azp: "aic-oauth-client" })
-        .setProtectedHeader({ alg: "RS256", kid: "aic-key-1" })
+        .setProtectedHeader({ alg: "PS256", kid: "aic-key-1" })
         .setIssuer(issuer)
         .setAudience(audience)
         .setExpirationTime("1h")

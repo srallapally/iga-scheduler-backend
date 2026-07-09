@@ -1,4 +1,4 @@
-import { createRemoteJWKSet, jwtVerify } from "jose";
+import { createRemoteJWKSet, jwtVerify, decodeProtectedHeader } from "jose";
 
 export function createPublicAuthMiddleware({
   issuer = process.env.PUBLIC_API_ISSUER,
@@ -24,7 +24,8 @@ export function createPublicAuthMiddleware({
       let claims;
       try {
         claims = await resolvedVerifyToken(match[1]);
-      } catch {
+      } catch (err) {
+        console.error("[publicAuth] token verification failed:", err.message);
         return res.status(401).json({ error: "invalid bearer token" });
       }
 
@@ -80,7 +81,10 @@ export function createJoseVerifier({ issuer, audience, jwksUrl }) {
 
   return async function verifyJoseToken(token) {
     const JWKS = await getJwks();
-    const { payload } = await jwtVerify(token, JWKS, { issuer, audience });
+    // Read the algorithm from the JWT header so we accept whatever the AS
+    // signs with (RS256, PS256, ES256, etc.) without hard-coding a value.
+    const { alg } = decodeProtectedHeader(token);
+    const { payload } = await jwtVerify(token, JWKS, { issuer, audience, algorithms: [alg] });
     return payload;
   };
 }

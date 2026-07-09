@@ -21,12 +21,15 @@ npm install
 
 # 2. Copy and fill in the env file
 cp .env.example .env
-# Set APP_MODE=local and the PingOne / OIDC vars
+# Set APP_MODE=local and the PUBLIC_API_* / WORKER_* / SCHEDULER_* auth vars
 
-# 3. Bootstrap (creates SQLite DB)
+# 3. (Optional) Run preflight — checks only the auth vars and JWKS endpoint in local mode
+APP_MODE=local npm run preflight
+
+# 4. Bootstrap (creates SQLite DB)
 APP_MODE=local npm run bootstrap
 
-# 4. Start
+# 5. Start
 npm run start:local
 ```
 
@@ -110,7 +113,7 @@ docs/
 | `npm run start:prod` | Force production mode |
 | `npm test` | Run all tests (`vitest run`) |
 | `npm run bootstrap` | Idempotent local bootstrap |
-| `npm run preflight` | Pre-deploy validation |
+| `npm run preflight` | Pre-deploy validation (local: auth vars + JWKS only; production: full) |
 | `npm run bootstrap:prod` | Production bootstrap |
 | `npm run bootstrap:prod:dry-run` | Dry-run production bootstrap |
 | `npm run migrate:up` | Apply pending PG migrations |
@@ -184,16 +187,22 @@ In either case, set `PUBLIC_API_JWKS_URL` only if you need to point at a non-sta
 
 ## Production bootstrap
 
-Run preflight first — it validates connectivity without writing anything:
+Run preflight first — it validates all required vars and probes live connectivity without writing anything. In production mode it checks all six areas (env vars, Elasticsearch, Postgres, GCS, Secret Manager, JWKS). In local mode it checks only the auth vars and JWKS endpoint.
 
 ```bash
+# Production (default)
 npm run preflight
-# or with inline creds:
+# or with inline creds if not already in the environment:
 node scripts/prod/preflight.js \
   --es-endpoint https://my-cluster.es.io:9243 \
   --es-api-key  <key> \
   --gcp-project my-project
+
+# Local mode
+APP_MODE=local npm run preflight
 ```
+
+`ES_ENDPOINT`, `ES_API_KEY`, and `GCP_PROJECT_ID` can be passed as `--es-endpoint`, `--es-api-key`, and `--gcp-project` CLI flags if they aren't already in the environment (production mode only).
 
 Then seed Postgres migrations and Elasticsearch indices:
 
@@ -202,8 +211,6 @@ npm run bootstrap:prod
 # or dry-run to see what would change:
 npm run bootstrap:prod:dry-run
 ```
-
-`ES_ENDPOINT`, `ES_API_KEY`, and `GCP_PROJECT_ID` can be passed as `--es-endpoint`, `--es-api-key`, and `--gcp-project` CLI flags if they aren't already in the environment.
 
 ## Infrastructure
 

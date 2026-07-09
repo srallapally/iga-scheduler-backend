@@ -4,6 +4,13 @@
 # IDE
 .idea/
 
+# Local data (SQLite DB, local artifact store)
+.local-data/
+
+# Bootstrap manifest — contains env metadata, should not be committed
+bootstrap-manifest.json
+bootstrap-manifest.torn-down-*.json
+
 ### Node template
 # Logs
 logs

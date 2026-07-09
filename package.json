@@ -14,6 +14,11 @@
     "dev": "node src/main.js",
     "test": "vitest run",
     "bootstrap": "node scripts/bootstrap.js",
+    "bootstrap:prod": "node scripts/prod/bootstrap-prod.js",
+    "bootstrap:prod:dry-run": "node scripts/prod/bootstrap-prod.js --dry-run",
+    "preflight": "node scripts/prod/preflight.js",
+    "teardown:prod": "node scripts/prod/teardown.js",
+    "teardown:prod:dry-run": "node scripts/prod/teardown.js --dry-run",
     "bootstrap:es": "node scripts/bootstrap-es-indices.js",
     "migrate:up": "node-pg-migrate up --migrations-dir migrations",
     "migrate:down": "node-pg-migrate down --migrations-dir migrations"

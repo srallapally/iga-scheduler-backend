@@ -10,7 +10,6 @@ export class RuntimeIgaProxyService {
   constructor({
     esClient = createEsClient(),
     runStore = null,
-    runsIndex = null,
     auditIndex = null,
     igaClient = null,
     enabled = parseBoolean(process.env.RUNTIME_IGA_PROXY_ENABLED, true),
@@ -23,7 +22,6 @@ export class RuntimeIgaProxyService {
   } = {}) {
     this.esClient = esClient;
     this.runStore = runStore;
-    this._runsIndex = runsIndex;
     this._auditIndex = auditIndex;
     this._igaClient = igaClient;
     this.enabled = enabled;
@@ -47,11 +45,6 @@ export class RuntimeIgaProxyService {
       this._igaClient = new IgaClient({ baseUrl: process.env.IGA_BASE_URL, tokenManager });
     }
     return this._igaClient;
-  }
-
-  get runsIndex() {
-    if (!this._runsIndex) this._runsIndex = getConfig().runsIndex;
-    return this._runsIndex;
   }
 
   get auditIndex() {
@@ -140,14 +133,7 @@ export class RuntimeIgaProxyService {
   }
 
   async getRun(runId) {
-    if (this.runStore) return this.runStore.getRun(runId);
-    try {
-      const response = await this.esClient.get({ index: this.runsIndex, id: runId });
-      return response._source;
-    } catch (error) {
-      if (error.meta?.statusCode === 404 || error.statusCode === 404) return null;
-      throw error;
-    }
+    return this.runStore.getRun(runId);
   }
 
   badRequest(code, message, statusCode = 400) {

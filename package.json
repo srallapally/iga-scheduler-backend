@@ -14,7 +14,8 @@
     "bootstrap:es": "node scripts/bootstrap-es-indices.js",
     "validate:production-config": "node scripts/validate-production-config.js",
     "migrate:up": "node-pg-migrate up --migrations-dir migrations",
-    "migrate:down": "node-pg-migrate down --migrations-dir migrations"
+    "migrate:down": "node-pg-migrate down --migrations-dir migrations",
+    "start:local": "node src/app.local.js"
   },
   "keywords": [],
   "author": "",
@@ -28,10 +29,10 @@
     "@google-cloud/cloud-sql-connector": "^1.4.0",
     "@google-cloud/secret-manager": "^6.1.0",
     "@google-cloud/storage": "^7.19.0",
-    "@google-cloud/tasks": "^6.2.2",
-    "google-auth-library": "^10.5.0",
     "cron-parser": "^5.5.0",
     "express": "^5.2.1",
+    "google-auth-library": "^10.5.0",
+    "jose": "^5.10.0",
     "multer": "^2.1.1",
     "node-pg-migrate": "^7.9.1",
     "pg": "^8.16.0",

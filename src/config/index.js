@@ -12,8 +12,6 @@ export function getConfig() {
     esEndpoint: process.env.ES_ENDPOINT,
     esApiKey: process.env.ES_API_KEY,
     definitionsIndex: process.env.ES_DEFINITIONS_INDEX || "scheduler_definitions_v1",
-    instancesIndex: process.env.ES_INSTANCES_INDEX || "scheduler_instances_v1",
-    runsIndex: process.env.ES_RUNS_INDEX || "scheduler_runs_v1",
     auditIndex: process.env.ES_AUDIT_INDEX || "scheduler_audit_v1",
     dbEngine: process.env.DB_ENGINE || "direct"
   };

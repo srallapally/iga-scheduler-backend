@@ -461,14 +461,7 @@ export class WorkerRunService {
   }
 
   async getRun(runId) {
-    if (this.runStore) return this.runStore.getRun(runId);
-    try {
-      const response = await this.esClient.get({ index: this.definitionsIndex.replace("definitions", "runs"), id: runId });
-      return response._source;
-    } catch (error) {
-      if (error.meta?.statusCode === 404 || error.statusCode === 404) return null;
-      throw error;
-    }
+    return this.runStore.getRun(runId);
   }
 
   async getDefinition(definitionId) {
@@ -482,9 +475,7 @@ export class WorkerRunService {
   }
 
   async claimRun({ runId, startedAt }) {
-    if (this.runStore) return this.runStore.claimRun({ runId, startedAt });
-    // legacy ES path — kept unwired; unreachable when runStore is present
-    throw new Error("claimRun requires runStore");
+    return this.runStore.claimRun({ runId, startedAt });
   }
 
   async recordRuntimeExecution({ runId, runtimeExecution, startedAt }) {

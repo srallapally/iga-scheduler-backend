@@ -1,4 +1,4 @@
-import { SchedulerJob } from "../../src/index.js";
+import { SchedulerJob } from "../../../src/index.js";
 
 // Static name pool — diverse but recognisably Western/English names.
 // The job picks from these deterministically based on position so that

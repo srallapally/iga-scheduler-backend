@@ -17,7 +17,9 @@ export function validateProductionStartupConfig({ env = process.env } = {}) {
     "IGA_TOKEN_ENDPOINT",
     "IGA_CLIENT_ID",
     "IGA_CLIENT_SECRET",
-    "IGA_BASE_URL"
+    "IGA_BASE_URL",
+    "PUBLIC_API_ISSUER",
+    "PUBLIC_API_AUDIENCE"
   ];
 
   const missing = required.filter((name) => !env[name]);

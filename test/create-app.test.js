@@ -4,8 +4,35 @@ import { createApp } from "../src/createApp.js";
 
 const originalEnv = { ...process.env };
 
+const TEST_PUBLIC_AUTH = {
+  issuer: "https://auth.example.test",
+  audience: "https://scheduler.example.test",
+  verifyToken: vi.fn(async () => ({ sub: "client-1" }))
+};
+
+const MOCK_DEFINITION_SERVICE = {
+  listDefinitions: vi.fn(async () => []),
+  getDefinition: vi.fn(async () => null),
+  createDefinition: vi.fn(async () => ({})),
+  patchDefinition: vi.fn(async () => ({})),
+  deleteDefinition: vi.fn(async () => ({}))
+};
+
+const MOCK_INSTANCE_SERVICE = {
+  createInstance: vi.fn(async () => ({})),
+  getInstance: vi.fn(async () => null),
+  patchInstance: vi.fn(async () => ({})),
+  pauseInstance: vi.fn(async () => ({})),
+  resumeInstance: vi.fn(async () => ({})),
+  deleteInstance: vi.fn(async () => ({})),
+  listInstancesForDefinition: vi.fn(async () => [])
+};
+
 function createTestApp(options = {}) {
   return createApp({
+    publicAuthOptions: TEST_PUBLIC_AUTH,
+    jobDefinitionService: MOCK_DEFINITION_SERVICE,
+    jobInstanceService: MOCK_INSTANCE_SERVICE,
     internalIgaOptions: {
       tokenManager: { getAccessToken: vi.fn(async () => "token") },
       igaClient: { get: vi.fn(async () => ({ status: "ok" })) }

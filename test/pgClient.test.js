@@ -60,6 +60,8 @@ function baseProductionEnv(overrides = {}) {
     IGA_CLIENT_ID: "id",
     IGA_CLIENT_SECRET: "secret",
     IGA_BASE_URL: "https://iga.test",
+    PUBLIC_API_ISSUER: "https://auth.pingone.example.test/env1/as",
+    PUBLIC_API_AUDIENCE: "https://scheduler.example.test",
     ...overrides
   };
 }

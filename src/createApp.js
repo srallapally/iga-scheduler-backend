@@ -1,15 +1,21 @@
 import crypto from "crypto";
 import express from "express";
 import { createJobDefinitionRouter } from "./routes/jobDefinitions.js";
-import { createJobInstanceRouter } from "./routes/jobInstances.js";
+import { createJobInstanceCollectionRouter, createJobInstanceRouter } from "./routes/jobInstances.js";
+import { createJobRunRouter, createInstanceRunRouter } from "./routes/jobRuns.js";
 import { createInternalIgaRouter } from "./routes/internalIga.js";
 import { createInternalRuntimeIgaRouter } from "./routes/internalRuntimeIga.js";
 import { createInternalSchedulerRouter } from "./routes/internalScheduler.js";
 import { createInternalWorkerRouter } from "./routes/internalWorker.js";
+import { createPublicAuthMiddleware } from "./middleware/publicAuth.js";
 
-export function createApp({ workerRunService, runStore, readiness = createDefaultReadiness(), internalIgaOptions = {}, internalRuntimeIgaOptions = {}, internalSchedulerOptions = {}, internalWorkerOptions = {} } = {}) {
+export function createApp({ workerRunService, runStore, jobInstanceService, jobDefinitionService, readiness = createDefaultReadiness(), publicAuthOptions, internalIgaOptions = {}, internalRuntimeIgaOptions = {}, internalSchedulerOptions = {}, internalWorkerOptions = {} } = {}) {
   const app = express();
   const cachedReadiness = { ...readiness };
+
+  const publicAuth = publicAuthOptions
+    ? createPublicAuthMiddleware(publicAuthOptions)
+    : createPublicAuthMiddleware();
 
   app.use(assignRequestId);
   app.use(express.json({ limit: "1mb" }));
@@ -24,8 +30,13 @@ export function createApp({ workerRunService, runStore, readiness = createDefaul
     res.json(cachedReadiness);
   });
 
-  app.use("/job-definitions", createJobDefinitionRouter());
-  app.use("/", createJobInstanceRouter());
+  const instanceOpts = jobInstanceService ? { service: jobInstanceService } : {};
+  const runOpts = runStore ? { runStore } : {};
+  app.use("/job-definitions", publicAuth, createJobDefinitionRouter(jobDefinitionService ? { service: jobDefinitionService } : {}));
+  app.use("/job-definitions/:definitionId/instances", publicAuth, createJobInstanceCollectionRouter(instanceOpts));
+  app.use("/job-instances", publicAuth, createJobInstanceRouter(instanceOpts));
+  app.use("/job-instances", publicAuth, createInstanceRunRouter(runOpts));
+  app.use("/job-runs", publicAuth, createJobRunRouter(runOpts));
   app.use(globalErrorHandler);
 
   return app;

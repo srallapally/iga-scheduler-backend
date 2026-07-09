@@ -2,19 +2,11 @@ import express from "express";
 import { ZodError } from "zod";
 import { JobInstanceService } from "../services/jobInstanceService.js";
 
-export function createJobInstanceRouter({ service = new JobInstanceService() } = {}) {
-  const router = express.Router();
+// Mounted at /job-definitions/:definitionId/instances
+export function createJobInstanceCollectionRouter({ service = new JobInstanceService() } = {}) {
+  const router = express.Router({ mergeParams: true });
 
-  router.post("/job-definitions/:definitionId/instances", async (req, res) => {
-    try {
-      const instance = await service.createInstance(req.params.definitionId, req.body);
-      res.status(201).json(instance);
-    } catch (error) {
-      handleError(res, error);
-    }
-  });
-
-  router.get("/job-definitions/:definitionId/instances", async (req, res) => {
+  router.get("/", async (req, res) => {
     try {
       const items = await service.listInstancesForDefinition(req.params.definitionId);
       res.json({ items });
@@ -23,7 +15,23 @@ export function createJobInstanceRouter({ service = new JobInstanceService() } =
     }
   });
 
-  router.get("/job-instances/:instanceId", async (req, res) => {
+  router.post("/", async (req, res) => {
+    try {
+      const instance = await service.createInstance(req.params.definitionId, req.body);
+      res.status(201).json(instance);
+    } catch (error) {
+      handleError(res, error);
+    }
+  });
+
+  return router;
+}
+
+// Mounted at /job-instances
+export function createJobInstanceRouter({ service = new JobInstanceService() } = {}) {
+  const router = express.Router();
+
+  router.get("/:instanceId", async (req, res) => {
     try {
       const instance = await service.getInstance(req.params.instanceId);
       if (!instance) {
@@ -35,7 +43,7 @@ export function createJobInstanceRouter({ service = new JobInstanceService() } =
     }
   });
 
-  router.patch("/job-instances/:instanceId", async (req, res) => {
+  router.patch("/:instanceId", async (req, res) => {
     try {
       const instance = await service.patchInstance(req.params.instanceId, req.body);
       res.json(instance);
@@ -44,7 +52,7 @@ export function createJobInstanceRouter({ service = new JobInstanceService() } =
     }
   });
 
-  router.post("/job-instances/:instanceId/pause", async (req, res) => {
+  router.post("/:instanceId/pause", async (req, res) => {
     try {
       const instance = await service.pauseInstance(req.params.instanceId);
       res.json(instance);
@@ -53,7 +61,7 @@ export function createJobInstanceRouter({ service = new JobInstanceService() } =
     }
   });
 
-  router.post("/job-instances/:instanceId/resume", async (req, res) => {
+  router.post("/:instanceId/resume", async (req, res) => {
     try {
       const instance = await service.resumeInstance(req.params.instanceId);
       res.json(instance);
@@ -62,7 +70,7 @@ export function createJobInstanceRouter({ service = new JobInstanceService() } =
     }
   });
 
-  router.delete("/job-instances/:instanceId", async (req, res) => {
+  router.delete("/:instanceId", async (req, res) => {
     try {
       const instance = await service.deleteInstance(req.params.instanceId);
       res.json(instance);
@@ -71,7 +79,7 @@ export function createJobInstanceRouter({ service = new JobInstanceService() } =
     }
   });
 
-  router.post("/job-instances/:instanceId/run-now", async (_req, res) => {
+  router.post("/:instanceId/run-now", async (_req, res) => {
     res.status(501).json({
       error: "run-now is deferred to Phase 5"
     });

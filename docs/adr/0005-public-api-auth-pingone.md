@@ -54,8 +54,17 @@ The `tenant_id` columns in `job_instances` and `job_runs` are nullable placehold
 - JWKS fetch adds an external dependency at startup; the service should fail fast if the JWKS endpoint is unreachable and `NODE_ENV=production`.
 - Tenant scoping must be implemented before the service routes requests from multiple distinct tenants. The current design does not prevent cross-tenant data access — it simply has no multi-tenant traffic to expose.
 
+### Mount-prefix fix
+
+The old `/` blanket mount for the instance router is replaced with explicit prefix mounts (`/job-definitions`, `/job-definitions/:definitionId/instances`, `/job-instances`, `/job-runs`). The `publicAuth` middleware is applied to all four. `/health`, `/ready`, and all `/internal/**` mounts are unaffected.
+
+### `runtimeExecution` exclusion
+
+`GET /job-runs/:runId` and `GET /job-instances/:instanceId/runs` omit the `runtimeExecution` field from responses. This field contains broker-internal Cloud Run Job launch metadata (job execution name, generation, etc.) that has no meaning to public API consumers.
+
 ### Required configuration (plan 5)
 
-- `PINGONE_ISSUER` — PingOne issuer URL (used for JWKS discovery and `iss` claim validation)
-- `PINGONE_AUDIENCE` — expected `aud` claim on incoming tokens
-- `PINGONE_REQUIRED_SCOPE` — required scope string (e.g. `scheduler:admin`)
+- `PUBLIC_API_ISSUER` — PingOne issuer URL (used for JWKS discovery and `iss` claim validation)
+- `PUBLIC_API_AUDIENCE` — expected `aud` claim on incoming tokens
+- `PUBLIC_API_REQUIRED_SCOPE` — optional required scope string (e.g. `scheduler:admin`)
+- `PUBLIC_API_JWKS_URL` — optional JWKS URL override (defaults to `${PUBLIC_API_ISSUER}/.well-known/jwks.json`)

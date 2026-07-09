@@ -24,6 +24,8 @@ function productionEnv(overrides = {}) {
     DB_INSTANCE_CONNECTION_NAME: "iga-scheduler:us-central1:scheduler-db",
     DB_USER: "scheduler",
     DB_NAME: "scheduler",
+    PUBLIC_API_ISSUER: "https://auth.pingone.example.com/env1/as",
+    PUBLIC_API_AUDIENCE: "https://scheduler.example.com",
     ...overrides
   };
 }
@@ -55,5 +57,13 @@ describe("validateProductionStartupConfig", () => {
 
   it("rejects runtime service account reuse", () => {
     expect(() => validateProductionStartupConfig({ env: productionEnv({ RUNTIME_SERVICE_ACCOUNT_EMAIL: "worker-invoker@iga-scheduler.iam.gserviceaccount.com" }) })).toThrow("RUNTIME_SERVICE_ACCOUNT_EMAIL must be separate from the worker invoker service account");
+  });
+
+  it("rejects missing PUBLIC_API_ISSUER", () => {
+    expect(() => validateProductionStartupConfig({ env: productionEnv({ PUBLIC_API_ISSUER: "" }) })).toThrow("Missing required production environment variables: PUBLIC_API_ISSUER");
+  });
+
+  it("rejects missing PUBLIC_API_AUDIENCE", () => {
+    expect(() => validateProductionStartupConfig({ env: productionEnv({ PUBLIC_API_AUDIENCE: "" }) })).toThrow("Missing required production environment variables: PUBLIC_API_AUDIENCE");
   });
 });

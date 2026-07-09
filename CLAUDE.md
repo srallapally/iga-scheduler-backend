@@ -3,15 +3,15 @@
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## ACTIVE MIGRATION — read this first
-
+Locked decisions and plan sequence: @plans/claude-code-plan-0-index.md
 The repo is mid-replatform: run/instance coordination is moving from Elasticsearch to Cloud SQL Postgres, and the public API is being secured with PingOne OAuth. The plan set lives in `plans/`; `plans/claude-code-plan-0-index.md` records the locked decisions and sequence.
 
 **Status (update this line when a plan completes):**
-- [ ] Plan 1 — PG foundation
-- [ ] Plan 2 — Run lifecycle on PG
-- [ ] Plan 3 — Instances, tick, dispatch poller
-- [ ] Plan 4 — Deletion pass
-- [ ] Plan 5 — Public API auth (PingOne)
+- [x] Plan 1 — PG foundation
+- [x] Plan 2 — Run lifecycle on PG
+- [x] Plan 3 — Instances, tick, dispatch poller
+- [x] Plan 4 — Deletion pass
+- [x] Plan 5 — Public API auth (PingOne)
 
 **Session rules:**
 - Execute exactly one plan per session, per its Stop Condition and Definition of Done. Do not start work from later plans.

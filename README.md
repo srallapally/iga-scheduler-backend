@@ -19,19 +19,21 @@ PingOne / PingOne AIC OAuth is active in both modes — you need a real PingOne 
 # 1. Install dependencies
 npm install
 
-# 2. Copy and fill in the env file
-cp .env.example .env
-# Set APP_MODE=local and the PUBLIC_API_* / WORKER_* / SCHEDULER_* auth vars
+# 2. Create .env.local and fill in the auth vars
+cp .env.example .env.local
+# Set APP_MODE=local and the PUBLIC_API_* / WORKER_* / SCHEDULER_* vars
 
-# 3. (Optional) Run preflight — checks only the auth vars and JWKS endpoint in local mode
-APP_MODE=local npm run preflight
+# 3. (Optional) Run preflight — checks auth vars and JWKS endpoint
+npm run preflight       # loads .env.local automatically
 
 # 4. Bootstrap (creates SQLite DB)
-APP_MODE=local npm run bootstrap
+npm run bootstrap       # loads .env.local automatically
 
 # 5. Start
-npm run start:local
+npm run start:local     # loads .env.local automatically
 ```
+
+`start:local`, `bootstrap`, and `preflight` all load `.env.local` automatically via Node's `--env-file-if-exists` flag (Node 22+). If `.env.local` is absent the commands still work — they just rely on whatever is already in the environment.
 
 ## Architecture
 
@@ -121,7 +123,14 @@ docs/
 
 ## Environment variables
 
-Copy `.env.example` and fill in values. Never commit `.env`.
+The app reads configuration from environment variables. Use `.env.local` for local mode and set vars directly in the environment (or a secrets manager) for production. Never commit either file.
+
+| File | Mode | Loaded by |
+|---|---|---|
+| `.env.local` | local | `npm run start:local`, `bootstrap`, `preflight` (auto, via `--env-file-if-exists`) |
+| `.env` | any | must be loaded manually (e.g. `node --env-file .env ...`) |
+
+Copy `.env.example` as a starting point for either file.
 
 **Required in all modes:**
 
@@ -190,16 +199,16 @@ In either case, set `PUBLIC_API_JWKS_URL` only if you need to point at a non-sta
 Run preflight first — it validates all required vars and probes live connectivity without writing anything. In production mode it checks all six areas (env vars, Elasticsearch, Postgres, GCS, Secret Manager, JWKS). In local mode it checks only the auth vars and JWKS endpoint.
 
 ```bash
-# Production (default)
+# Production (default) — reads vars from the environment
 npm run preflight
-# or with inline creds if not already in the environment:
+# or supply ES/GCP creds as flags if not already in the environment:
 node scripts/prod/preflight.js \
   --es-endpoint https://my-cluster.es.io:9243 \
   --es-api-key  <key> \
   --gcp-project my-project
 
-# Local mode
-APP_MODE=local npm run preflight
+# Local mode — loads .env.local automatically, no prefix needed
+npm run preflight
 ```
 
 `ES_ENDPOINT`, `ES_API_KEY`, and `GCP_PROJECT_ID` can be passed as `--es-endpoint`, `--es-api-key`, and `--gcp-project` CLI flags if they aren't already in the environment (production mode only).

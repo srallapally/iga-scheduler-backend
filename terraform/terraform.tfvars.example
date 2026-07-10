@@ -1,0 +1,14 @@
+project_id             = "example-project-id"
+region                 = "us-central1"
+cloud_run_service_name = "iga-scheduler"
+cloud_run_service_url  = "https://iga-scheduler-example-uc.a.run.app"
+
+# Default production tick. Keep this as {} for real dispatch.
+scheduler_tick_body = {}
+
+# Optional dry-run validation body:
+# scheduler_tick_body = {
+#   dryRun    = true
+#   enqueue   = false
+#   batchSize = 1
+# }

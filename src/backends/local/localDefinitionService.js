@@ -51,16 +51,22 @@ export class LocalDefinitionService {
       updatedAt: now
     };
 
-    const existing = this.db.prepare("SELECT 1 FROM job_definitions WHERE definition_id = ?").get(parsed.definitionId);
-    if (existing) {
+    const existing = this.db.prepare("SELECT state FROM job_definitions WHERE definition_id = ?").get(parsed.definitionId);
+    if (existing && existing.state !== "DELETED") {
       const err = new Error("definition already exists");
       err.meta = { statusCode: 409 };
       throw err;
     }
 
-    this.db.prepare(
-      "INSERT INTO job_definitions (definition_id, data, state, enabled, updated_at) VALUES (?, ?, ?, ?, ?)"
-    ).run(parsed.definitionId, JSON.stringify(doc), "ACTIVE", 1, now);
+    if (existing) {
+      this.db.prepare(
+        "UPDATE job_definitions SET data = ?, state = 'ACTIVE', enabled = 1, updated_at = ? WHERE definition_id = ?"
+      ).run(JSON.stringify(doc), now, parsed.definitionId);
+    } else {
+      this.db.prepare(
+        "INSERT INTO job_definitions (definition_id, data, state, enabled, updated_at) VALUES (?, ?, ?, ?, ?)"
+      ).run(parsed.definitionId, JSON.stringify(doc), "ACTIVE", 1, now);
+    }
 
     return doc;
   }

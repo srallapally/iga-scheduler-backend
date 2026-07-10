@@ -40,6 +40,21 @@ export class LocalWorkerRunService extends WorkerRunService {
     this.dataDir = dataDir;
   }
 
+  buildRuntimeContext({ run, execution, params = {} }) {
+    const base = super.buildRuntimeContext({ run, execution, params });
+    // Inject IGA credentials so the job can call IGA directly without the broker proxy
+    const igaDirect = {
+      baseUrl: process.env.IGA_BASE_URL,
+      tokenEndpoint: process.env.IGA_TOKEN_ENDPOINT,
+      clientId: process.env.IGA_CLIENT_ID,
+      clientSecret: process.env.IGA_CLIENT_SECRET,
+    };
+    if (igaDirect.baseUrl && igaDirect.clientId && igaDirect.clientSecret) {
+      base.igaDirect = igaDirect;
+    }
+    return base;
+  }
+
   async getDefinition(definitionId) {
     return this.localDefinitionService.getDefinition(definitionId);
   }

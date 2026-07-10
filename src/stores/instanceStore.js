@@ -8,8 +8,17 @@ export class InstanceStore {
     const row = documentToRow(document);
     const cols = Object.keys(row);
     const vals = cols.map((_, i) => `$${i + 1}`);
+
+    // On conflict, replace only if the existing row is DELETED — this lets an
+    // operator reuse an instanceId after deleting it.  A live (non-deleted)
+    // row still blocks the insert and surfaces as 409.
+    const updateCols = cols.filter((c) => c !== "instance_id");
+    const updateClause = updateCols.map((c, i) => `${c} = EXCLUDED.${c}`).join(", ");
+
     const { rowCount } = await this.pool.query(
-      `INSERT INTO job_instances (${cols.join(", ")}) VALUES (${vals.join(", ")}) ON CONFLICT (instance_id) DO NOTHING`,
+      `INSERT INTO job_instances (${cols.join(", ")}) VALUES (${vals.join(", ")})
+       ON CONFLICT (instance_id) DO UPDATE SET ${updateClause}
+       WHERE job_instances.state = 'DELETED'`,
       cols.map((c) => row[c])
     );
     if (rowCount === 0) {

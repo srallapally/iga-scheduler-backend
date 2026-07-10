@@ -30,7 +30,10 @@ export function createPublicAuthMiddleware({
       }
 
       if (requiredScope) {
-        const tokenScopes = (claims.scope || "").split(" ").filter(Boolean);
+        // scope may be a space-separated string (PingOne) or an array (AIC/ForgeRock)
+        const tokenScopes = Array.isArray(claims.scope)
+          ? claims.scope
+          : (claims.scope || "").split(" ").filter(Boolean);
         if (!tokenScopes.includes(requiredScope)) {
           return res.status(403).json({ error: "insufficient scope" });
         }

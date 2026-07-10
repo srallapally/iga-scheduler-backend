@@ -1,6 +1,9 @@
 # macOS
 .DS_Store
 
+# Built job artifacts — regenerated from source; not committed
+examples/**/*.zip
+
 # IDE
 .idea/
 

@@ -1,4 +1,4 @@
-import { SchedulerJob } from "../../../src/index.js";
+import { SchedulerJob } from "./scheduler-sdk.js";
 
 export default class RiskScoreJob extends SchedulerJob {
     async execute(context) {

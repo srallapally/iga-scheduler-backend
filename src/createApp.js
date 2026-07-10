@@ -34,7 +34,7 @@ export function createApp({ workerRunService, runStore, jobInstanceService, jobD
   const runOpts = runStore ? { runStore } : {};
   app.use("/job-definitions", publicAuth, createJobDefinitionRouter(jobDefinitionService ? { service: jobDefinitionService } : {}));
   app.use("/job-definitions/:definitionId/instances", publicAuth, createJobInstanceCollectionRouter(instanceOpts));
-  app.use("/job-instances", publicAuth, createJobInstanceRouter(instanceOpts));
+  app.use("/job-instances", publicAuth, createJobInstanceRouter({ ...instanceOpts, ...runOpts }));
   app.use("/job-instances", publicAuth, createInstanceRunRouter(runOpts));
   app.use("/job-runs", publicAuth, createJobRunRouter(runOpts));
   app.use(globalErrorHandler);

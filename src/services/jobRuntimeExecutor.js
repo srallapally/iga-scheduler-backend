@@ -3,7 +3,7 @@ import fs from "fs/promises";
 import path from "path";
 import { safeZipExtract } from "../utils/safeZipExtract.js";
 
-const DEFAULT_ALLOWED_RUNTIMES = { javascript: new Set(["nodejs22"]) };
+const DEFAULT_ALLOWED_RUNTIMES = { javascript: new Set(["nodejs22", "22"]) };
 const RESULT_PREFIX = "IGA_RESULT_JSON:";
 const DEFAULT_TIMEOUT_SECONDS = 300;
 const DEFAULT_MAX_TIMEOUT_SECONDS = 1800;

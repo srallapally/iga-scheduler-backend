@@ -1,3 +1,4 @@
+import { randomUUID } from "crypto";
 import express from "express";
 import { ZodError } from "zod";
 import { JobInstanceService } from "../services/jobInstanceService.js";
@@ -28,7 +29,7 @@ export function createJobInstanceCollectionRouter({ service = new JobInstanceSer
 }
 
 // Mounted at /job-instances
-export function createJobInstanceRouter({ service = new JobInstanceService() } = {}) {
+export function createJobInstanceRouter({ service = new JobInstanceService(), runStore } = {}) {
   const router = express.Router();
 
   router.get("/:instanceId", async (req, res) => {
@@ -79,10 +80,38 @@ export function createJobInstanceRouter({ service = new JobInstanceService() } =
     }
   });
 
-  router.post("/:instanceId/run-now", async (_req, res) => {
-    res.status(501).json({
-      error: "run-now is deferred to Phase 5"
-    });
+  router.post("/:instanceId/run-now", async (req, res) => {
+    try {
+      if (!runStore) return res.status(503).json({ error: "runStore not available" });
+      const instance = await service.getInstance(req.params.instanceId);
+      if (!instance) return res.status(404).json({ error: "instance not found" });
+      if (instance.state === "DELETED") return res.status(409).json({ error: "instance is deleted" });
+      const nowIso = new Date().toISOString();
+      const runId = `${instance.instanceId}:manual:${randomUUID()}`;
+      const run = {
+        runId,
+        tenantId: instance.tenantId ?? null,
+        definitionId: instance.definitionId,
+        definitionVersion: instance.definitionVersion,
+        instanceId: instance.instanceId,
+        scheduledFireTime: nowIso,
+        state: "QUEUED",
+        attempt: 1,
+        params: instance.parameters ?? {},
+        createdAt: nowIso,
+        startedAt: null,
+        endedAt: null,
+        heartbeatAt: null,
+        status: { phase: "queued", message: "Run queued by run-now" },
+        feedback: {},
+        result: null,
+        error: null
+      };
+      await runStore.createRun(run);
+      res.status(201).json({ runId, state: "QUEUED", instanceId: instance.instanceId });
+    } catch (error) {
+      handleError(res, error);
+    }
   });
 
   return router;

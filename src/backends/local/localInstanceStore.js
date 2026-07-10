@@ -61,8 +61,12 @@ export class LocalInstanceStore {
   async createInstance(document) {
     const row = toRow(document);
     const cols = Object.keys(row);
+    const updateCols = cols.filter((c) => c !== "instance_id");
+    const updateClause = updateCols.map((c) => `${c} = excluded.${c}`).join(", ");
     const result = this.db.prepare(
-      `INSERT INTO job_instances (${cols.join(", ")}) VALUES (${cols.map(() => "?").join(", ")}) ON CONFLICT (instance_id) DO NOTHING`
+      `INSERT INTO job_instances (${cols.join(", ")}) VALUES (${cols.map(() => "?").join(", ")})
+       ON CONFLICT (instance_id) DO UPDATE SET ${updateClause}
+       WHERE job_instances.state = 'DELETED'`
     ).run(...cols.map((c) => row[c]));
     if (result.changes === 0) {
       const err = new Error("instance already exists");

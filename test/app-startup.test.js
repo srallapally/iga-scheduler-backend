@@ -25,7 +25,7 @@ function productionEnv(overrides = {}) {
     SCHEDULER_OIDC_AUDIENCE: "https://scheduler.example",
     SCHEDULER_INVOKER_SERVICE_ACCOUNT_EMAIL: "scheduler-invoker@example.iam.gserviceaccount.com",
     WORKER_EXECUTION_MODE: "isolated",
-    RUNTIME_CLOUD_RUN_JOB_NAME: "iga-runtime-job",
+    RUNTIME_WORKER_URL: "https://worker.example",
     RUNTIME_SERVICE_ACCOUNT_EMAIL: "iga-runtime@example.iam.gserviceaccount.com",
     RUNTIME_BROKER_URL: "https://worker.example/internal/runtime-broker",
     DB_ENGINE: "direct",
@@ -80,7 +80,7 @@ describe("startApplication", () => {
       readiness: expect.objectContaining({
         environment: "production",
         executionMode: "isolated",
-        runtimeJobConfigured: true,
+        runtimeWorkerConfigured: true,
         runtimeServiceAccountConfigured: true,
         runtimeBrokerConfigured: true
       })

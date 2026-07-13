@@ -1,11 +1,10 @@
 import { pathToFileURL } from "node:url";
-import { createCloudRunJobsClient } from "./clients/cloudRunJobsClient.js";
 import { createPgPool } from "./clients/pgClient.js";
 import { validateProductionStartupConfig } from "./config/productionValidation.js";
 import { createApp } from "./createApp.js";
 import { InstanceStore } from "./stores/instanceStore.js";
 import { RunStore } from "./stores/runStore.js";
-import { CloudRunJobRuntimeLauncher } from "./services/cloudRunJobRuntimeLauncher.js";
+import { WorkerServiceRuntimeLauncher } from "./services/workerServiceRuntimeLauncher.js";
 import { JobInstanceService } from "./services/jobInstanceService.js";
 import { RunDispatcher } from "./services/runDispatcher.js";
 import { SchedulerTickService } from "./services/schedulerTickService.js";
@@ -18,10 +17,8 @@ export async function startApplication({ pool: injectedPool } = {}) {
 
   const executionMode = process.env.WORKER_EXECUTION_MODE || "local";
   const isolatedRuntimeLauncher = executionMode === "isolated"
-    ? new CloudRunJobRuntimeLauncher({
-        jobsClient: createCloudRunJobsClient(),
-        jobName: process.env.RUNTIME_CLOUD_RUN_JOB_NAME,
-        brokerUrl: process.env.RUNTIME_BROKER_URL,
+    ? new WorkerServiceRuntimeLauncher({
+        workerUrl: process.env.RUNTIME_WORKER_URL,
         runtimeServiceAccount: process.env.RUNTIME_SERVICE_ACCOUNT_EMAIL
       })
     : null;
@@ -50,7 +47,7 @@ export async function startApplication({ pool: injectedPool } = {}) {
     environment: process.env.NODE_ENV || "development",
     executionMode,
     dbEngine: process.env.DB_ENGINE || "direct",
-    runtimeJobConfigured: Boolean(process.env.RUNTIME_CLOUD_RUN_JOB_NAME),
+    runtimeWorkerConfigured: Boolean(process.env.RUNTIME_WORKER_URL),
     runtimeServiceAccountConfigured: Boolean(process.env.RUNTIME_SERVICE_ACCOUNT_EMAIL),
     runtimeBrokerConfigured: Boolean(process.env.RUNTIME_BROKER_URL)
   };

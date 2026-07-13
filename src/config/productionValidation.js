@@ -11,7 +11,7 @@ export function validateProductionStartupConfig({ env = process.env } = {}) {
     "SCHEDULER_OIDC_AUDIENCE",
     "SCHEDULER_INVOKER_SERVICE_ACCOUNT_EMAIL",
     "WORKER_EXECUTION_MODE",
-    "RUNTIME_CLOUD_RUN_JOB_NAME",
+    "RUNTIME_WORKER_URL",
     "RUNTIME_SERVICE_ACCOUNT_EMAIL",
     "RUNTIME_BROKER_URL",
     "IGA_TOKEN_ENDPOINT",

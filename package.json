@@ -20,6 +20,7 @@
     "teardown:prod": "node scripts/prod/teardown.js",
     "teardown:prod:dry-run": "node scripts/prod/teardown.js --dry-run",
     "bootstrap:es": "node scripts/bootstrap-es-indices.js",
+    "worker": "node src/workers/app.js",
     "migrate:up": "node-pg-migrate up --migrations-dir migrations",
     "migrate:down": "node-pg-migrate down --migrations-dir migrations"
   },

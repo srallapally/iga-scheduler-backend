@@ -1,27 +1,22 @@
-import { SchedulerJob } from "./scheduler-sdk.js";
+import { SchedulerJob, runJob } from "./scheduler-sdk.js";
 
 export default class RiskScoreJob extends SchedulerJob {
-    async execute(context) {
-        const scanType = context.parameters.getString("scanType");
-        const applications = context.parameters.getStringArray("applications");
+  async execute(context) {
+    const scanType    = context.param.requiredString("scanType");
+    const applications = context.param.requiredStringArray("applications");
 
-        await context.status.update({
-            phase: "starting",
-            message: "Starting risk score recompute"
-        });
+    const response = await context.igaClient.execute(
+      "POST",
+      "/scheduler/risk-scores/recompute",
+      { scanType, applications }
+    );
 
-        const response = await context.iga.riskScores.recompute({
-            scanType,
-            applications
-        });
-
-        await context.feedback.update({
-            igaRequestId: response.requestId
-        });
-
-        return {
-            status: "submitted",
-            igaRequestId: response.requestId
-        };
-    }
+    return {
+      status: "submitted",
+      igaRequestId: response.requestId
+    };
+  }
 }
+
+// Only auto-run when executed directly (not when imported by tests)
+if (!process.env.VITEST) runJob(RiskScoreJob);

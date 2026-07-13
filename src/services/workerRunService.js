@@ -372,8 +372,7 @@ export class WorkerRunService {
       instance: { instanceId: run.instanceId },
       scheduledFireTime: run.scheduledFireTime,
       attempt: run.attempt,
-      params,
-      igaBridge: { capabilities: ["riskScores.recompute", "health.check"] }
+      params
     };
   }
 

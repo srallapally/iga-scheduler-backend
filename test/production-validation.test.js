@@ -13,7 +13,7 @@ function productionEnv(overrides = {}) {
     SCHEDULER_OIDC_AUDIENCE: "https://scheduler.example.test",
     SCHEDULER_INVOKER_SERVICE_ACCOUNT_EMAIL: "scheduler-invoker@iga-scheduler.iam.gserviceaccount.com",
     WORKER_EXECUTION_MODE: "isolated",
-    RUNTIME_CLOUD_RUN_JOB_NAME: "iga-runtime-job",
+    RUNTIME_WORKER_URL: "https://worker.example.test",
     RUNTIME_SERVICE_ACCOUNT_EMAIL: "iga-runtime@iga-scheduler.iam.gserviceaccount.com",
     RUNTIME_BROKER_URL: "https://worker.example.test/internal/runtime-broker",
     IGA_TOKEN_ENDPOINT: "https://iga.example.test/oauth2/token",
@@ -43,8 +43,8 @@ describe("validateProductionStartupConfig", () => {
     expect(() => validateProductionStartupConfig({ env: productionEnv({ WORKER_EXECUTION_MODE: "local" }) })).toThrow("WORKER_EXECUTION_MODE must be isolated in production");
   });
 
-  it("rejects missing runtime job configuration", () => {
-    expect(() => validateProductionStartupConfig({ env: productionEnv({ RUNTIME_CLOUD_RUN_JOB_NAME: "" }) })).toThrow("Missing required production environment variables: RUNTIME_CLOUD_RUN_JOB_NAME");
+  it("rejects missing runtime worker configuration", () => {
+    expect(() => validateProductionStartupConfig({ env: productionEnv({ RUNTIME_WORKER_URL: "" }) })).toThrow("Missing required production environment variables: RUNTIME_WORKER_URL");
   });
 
   it("rejects missing IGA configuration", () => {

@@ -1,50 +1,27 @@
 import { describe, expect, it, vi } from "vitest";
-import RiskScoreJob from "../examples/js/risk-score-job.js";
+import RiskScoreJob from "../examples/js/risk-score-job/job.js";
 
 describe("RiskScoreJob", () => {
-    it("executes using wrapper-provided context", async () => {
-        const context = {
-            runId: "run-1",
-            definitionId: "risk-score",
-            instanceId: "risk-score-prod",
-            parameters: {
-                getString: vi.fn().mockReturnValue("FULL"),
-                getStringArray: vi.fn().mockReturnValue(["Salesforce"]),
-                getSecret: vi.fn()
-            },
-            iga: {
-                riskScores: {
-                    recompute: vi.fn().mockResolvedValue({ requestId: "iga-123" })
-                }
-            },
-            status: {
-                update: vi.fn()
-            },
-            feedback: {
-                update: vi.fn()
-            },
-            logger: {
-                info: vi.fn(),
-                warn: vi.fn(),
-                error: vi.fn()
-            },
-            audit: {
-                event: vi.fn()
-            },
-            isCancellationRequested: vi.fn().mockResolvedValue(false)
-        };
+  it("calls igaClient.execute with the correct path and returns the result", async () => {
+    const igaClient = {
+      execute: vi.fn().mockResolvedValue({ requestId: "iga-123" })
+    };
+    const context = {
+      param: {
+        requiredString: vi.fn().mockReturnValue("FULL"),
+        requiredStringArray: vi.fn().mockReturnValue(["Salesforce"])
+      },
+      igaClient
+    };
 
-        const job = new RiskScoreJob();
-        const result = await job.run(context);
+    const job = new RiskScoreJob();
+    const result = await job.execute(context);
 
-        expect(result).toEqual({
-            status: "submitted",
-            igaRequestId: "iga-123"
-        });
-
-        expect(context.iga.riskScores.recompute).toHaveBeenCalledWith({
-            scanType: "FULL",
-            applications: ["Salesforce"]
-        });
-    });
+    expect(result).toEqual({ status: "submitted", igaRequestId: "iga-123" });
+    expect(igaClient.execute).toHaveBeenCalledWith(
+      "POST",
+      "/scheduler/risk-scores/recompute",
+      { scanType: "FULL", applications: ["Salesforce"] }
+    );
+  });
 });

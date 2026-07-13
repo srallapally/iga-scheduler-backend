@@ -32,12 +32,11 @@ async function createZip(entries) {
 }
 
 async function runtimeSdkEntries() {
-  const [contextSource, resultSource, statusSource, paramsSource, igaSource, indexSource] = await Promise.all([
+  const [contextSource, resultSource, statusSource, paramsSource, indexSource] = await Promise.all([
     fs.readFile(new URL("../src/runtime/context.js", import.meta.url), "utf8"),
     fs.readFile(new URL("../src/runtime/result.js", import.meta.url), "utf8"),
     fs.readFile(new URL("../src/runtime/status.js", import.meta.url), "utf8"),
     fs.readFile(new URL("../src/runtime/params.js", import.meta.url), "utf8"),
-    fs.readFile(new URL("../src/runtime/iga.js", import.meta.url), "utf8"),
     fs.readFile(new URL("../src/runtime/index.js", import.meta.url), "utf8")
   ]);
 
@@ -46,7 +45,6 @@ async function runtimeSdkEntries() {
     { name: "runtime/result.js", content: resultSource },
     { name: "runtime/status.js", content: statusSource },
     { name: "runtime/params.js", content: paramsSource },
-    { name: "runtime/iga.js", content: igaSource },
     { name: "runtime/index.js", content: indexSource }
   ];
 }
@@ -159,5 +157,34 @@ describe("JobRuntimeExecutor", () => {
   it("requires artifactBuffer to be a Buffer", async () => {
     const executor = createExecutor();
     await expect(executor.execute({ runId: "run-1", execution: { definition: { runtime: "javascript", runtimeVersion: "nodejs22", entrypoint: "index.js" } }, artifactBuffer: "not-a-buffer" })).rejects.toMatchObject({ code: "RUNTIME_ARTIFACT_BUFFER_REQUIRED", retryable: false });
+  });
+
+  it("injects scheduler-sdk.js and exposes igaClient in the job", async () => {
+    const executor = createExecutor();
+    // The job imports the injected scheduler-sdk.js and checks igaClient is available
+    const script = `
+      import { createContext } from './scheduler-sdk.js';
+      const ctx = await createContext(process.env);
+      console.log('IGA_RESULT_JSON:' + JSON.stringify({ hasIgaClient: typeof ctx.igaClient.execute === 'function', runId: ctx.runId }));
+    `;
+    const result = await executor.execute(await validRequest({
+      artifactBuffer: await validArtifactBuffer(script),
+      context: { runId: "run-sdk-test", params: {} }
+    }));
+    expect(result.output).toEqual({ hasIgaClient: true, runId: "run-sdk-test" });
+  });
+
+  it("passes IGA_BROKER_URL to child process when RUNTIME_BROKER_URL is set", async () => {
+    const executor = createExecutor();
+    const script = `console.log('IGA_RESULT_JSON:' + JSON.stringify({ brokerUrl: process.env.IGA_BROKER_URL ?? null }));`;
+    const originalBrokerUrl = process.env.RUNTIME_BROKER_URL;
+    process.env.RUNTIME_BROKER_URL = "https://broker.test.example.com";
+    try {
+      const result = await executor.execute(await validRequest({ artifactBuffer: await validArtifactBuffer(script) }));
+      expect(result.output).toEqual({ brokerUrl: "https://broker.test.example.com" });
+    } finally {
+      if (originalBrokerUrl === undefined) delete process.env.RUNTIME_BROKER_URL;
+      else process.env.RUNTIME_BROKER_URL = originalBrokerUrl;
+    }
   });
 });

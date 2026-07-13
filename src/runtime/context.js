@@ -1,5 +1,4 @@
 import fs from "fs/promises";
-import { createIgaHelpers } from "./iga.js";
 import { createParameterReader } from "./params.js";
 
 export async function loadRuntimeContext({ env = process.env, readFile = fs.readFile } = {}) {
@@ -16,12 +15,7 @@ export async function loadRuntimeContext({ env = process.env, readFile = fs.read
 export async function createRuntimeContext(options = {}) {
   const context = await loadRuntimeContext(options);
   const params = context.params || {};
-  return { raw: context, runId: context.runId, definition: context.definition, instance: context.instance, scheduledFireTime: context.scheduledFireTime, attempt: context.attempt, params, param: createParameterReader(params), iga: createIgaHelpers({ client: options.igaClient, bridge: options.igaBridge || createContextBridge(context.igaBridge) }) };
-}
-
-function createContextBridge(config) {
-  if (!config) return undefined;
-  return { invoke: async () => { const error = new Error("runtime IGA bridge transport is not configured in this SDK build"); error.code = "RUNTIME_IGA_BRIDGE_TRANSPORT_UNAVAILABLE"; throw error; } };
+  return { raw: context, runId: context.runId, definition: context.definition, instance: context.instance, scheduledFireTime: context.scheduledFireTime, attempt: context.attempt, params, param: createParameterReader(params) };
 }
 
 function runtimeContextError(code, message, { cause } = {}) {

@@ -136,7 +136,7 @@ describe("JobRuntimeExecutor", () => {
 
   it("rejects unsupported runtime", async () => {
     const executor = createExecutor();
-    await expect(executor.execute(await validRequest({ execution: { definition: { runtime: "python", runtimeVersion: "python3.12", entrypoint: "main.py" } } }))).rejects.toMatchObject({ code: "RUNTIME_UNSUPPORTED", retryable: false });
+    await expect(executor.execute(await validRequest({ execution: { definition: { runtime: "ruby", runtimeVersion: "ruby3", entrypoint: "main.rb" } } }))).rejects.toMatchObject({ code: "RUNTIME_UNSUPPORTED", retryable: false });
   });
 
   it("rejects unsupported runtimeVersion", async () => {
@@ -186,5 +186,114 @@ describe("JobRuntimeExecutor", () => {
       if (originalBrokerUrl === undefined) delete process.env.RUNTIME_BROKER_URL;
       else process.env.RUNTIME_BROKER_URL = originalBrokerUrl;
     }
+  });
+});
+
+describe("JobRuntimeExecutor - resolveArtifactBuffer", () => {
+  it("returns a pre-supplied Buffer unchanged", async () => {
+    const executor = createExecutor();
+    const buf = Buffer.from("test");
+    const result = await executor.resolveArtifactBuffer({ execution: {}, artifactBuffer: buf });
+    expect(result).toBe(buf);
+  });
+
+  it("throws RUNTIME_ARTIFACT_BUFFER_REQUIRED when no buffer and no artifact metadata", async () => {
+    const executor = createExecutor();
+    await expect(executor.resolveArtifactBuffer({ execution: { artifact: {} } }))
+      .rejects.toMatchObject({ code: "RUNTIME_ARTIFACT_BUFFER_REQUIRED", retryable: false });
+  });
+
+  it("throws RUNTIME_ARTIFACT_BUFFER_REQUIRED when artifact metadata is partially missing", async () => {
+    const executor = createExecutor();
+    await expect(executor.resolveArtifactBuffer({ execution: { artifact: { uri: "gs://b/o" } } }))
+      .rejects.toMatchObject({ code: "RUNTIME_ARTIFACT_BUFFER_REQUIRED", retryable: false });
+  });
+
+  it("downloads from GCS and verifies SHA256", async () => {
+    const executor = createExecutor();
+    const content = Buffer.from("zip-content");
+    const crypto = await import("crypto");
+    const sha256 = crypto.default.createHash("sha256").update(content).digest("hex");
+    const mockFile = { download: async () => [content] };
+    const mockBucket = { file: () => mockFile };
+    executor._storage = { bucket: () => mockBucket };
+
+    const result = await executor.resolveArtifactBuffer({
+      execution: { artifact: { uri: "gs://my-bucket/my-object", sha256, generation: "12345" } }
+    });
+    expect(result).toEqual(content);
+  });
+
+  it("throws RUNTIME_ARTIFACT_DOWNLOAD_FAILED on GCS error (retryable)", async () => {
+    const executor = createExecutor();
+    const mockFile = { download: async () => { throw new Error("network error"); } };
+    const mockBucket = { file: () => mockFile };
+    executor._storage = { bucket: () => mockBucket };
+
+    await expect(executor.resolveArtifactBuffer({
+      execution: { artifact: { uri: "gs://b/o", sha256: "abc123", generation: "1" } }
+    })).rejects.toMatchObject({ code: "RUNTIME_ARTIFACT_DOWNLOAD_FAILED", retryable: true });
+  });
+
+  it("throws RUNTIME_ARTIFACT_SHA256_MISMATCH on hash mismatch (non-retryable)", async () => {
+    const executor = createExecutor();
+    const mockFile = { download: async () => [Buffer.from("real-content")] };
+    const mockBucket = { file: () => mockFile };
+    executor._storage = { bucket: () => mockBucket };
+
+    await expect(executor.resolveArtifactBuffer({
+      execution: { artifact: { uri: "gs://b/o", sha256: "wrong-hash", generation: "1" } }
+    })).rejects.toMatchObject({ code: "RUNTIME_ARTIFACT_SHA256_MISMATCH", retryable: false });
+  });
+});
+
+describe("JobRuntimeExecutor - Python support", () => {
+  it("accepts python311 and python312 runtimeVersions", () => {
+    const executor = createExecutor();
+    expect(() => executor.validateRuntime({ runtime: "python", runtimeVersion: "python311" })).not.toThrow();
+    expect(() => executor.validateRuntime({ runtime: "python", runtimeVersion: "python312" })).not.toThrow();
+  });
+
+  it("rejects unsupported Python version with RUNTIME_VERSION_UNSUPPORTED", () => {
+    const executor = createExecutor();
+    expect(() => executor.validateRuntime({ runtime: "python", runtimeVersion: "python310" }))
+      .toThrow(expect.objectContaining({ code: "RUNTIME_VERSION_UNSUPPORTED", retryable: false }));
+  });
+
+  it("resolveSpawnCommand for javascript returns process.execPath with memory flag", () => {
+    const executor = createExecutor();
+    const { command, args } = executor.resolveSpawnCommand("javascript", "nodejs22", "index.js", 256);
+    expect(command).toBe(process.execPath);
+    expect(args).toEqual(["--max-old-space-size=256", "index.js"]);
+  });
+
+  it("resolveSpawnCommand for python311 returns bare binary name", () => {
+    const executor = createExecutor();
+    const orig = process.env.PYTHON311_BIN;
+    delete process.env.PYTHON311_BIN;
+    try {
+      const { command, args } = executor.resolveSpawnCommand("python", "python311", "main.py", 256);
+      expect(command).toBe("python3.11");
+      expect(args).toEqual(["main.py"]);
+    } finally {
+      if (orig !== undefined) process.env.PYTHON311_BIN = orig;
+    }
+  });
+
+  it("resolveSpawnCommand for python311 uses PYTHON311_BIN env override", () => {
+    const executor = createExecutor();
+    process.env.PYTHON311_BIN = "/opt/homebrew/bin/python3.11";
+    try {
+      const { command } = executor.resolveSpawnCommand("python", "python311", "main.py", 256);
+      expect(command).toBe("/opt/homebrew/bin/python3.11");
+    } finally {
+      delete process.env.PYTHON311_BIN;
+    }
+  });
+
+  it("resolvePythonBinary throws RUNTIME_VERSION_UNSUPPORTED for unknown version", () => {
+    const executor = createExecutor();
+    expect(() => executor.resolvePythonBinary("python310"))
+      .toThrow(expect.objectContaining({ code: "RUNTIME_VERSION_UNSUPPORTED" }));
   });
 });

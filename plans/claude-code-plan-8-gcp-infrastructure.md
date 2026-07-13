@@ -1,0 +1,1151 @@
+# Claude Code Plan 8: GCP Infrastructure (Terraform)
+
+## Context
+
+The existing `terraform/` root provisions exactly one thing: the Cloud Scheduler tick
+invocation path (2 service accounts, 2 IAM bindings, 1 Cloud Scheduler job). Its own
+README says it "assumes the Cloud Run service already exists." Everything else required
+by `productionValidation.js` — Cloud SQL, the GCS artifact bucket, Secret Manager,
+`RUNTIME_SERVICE_ACCOUNT_EMAIL`, and the `iga-job-worker` Cloud Run Service that plan 6
+introduced — has no infrastructure-as-code anywhere in the repo.
+
+Plan 6 replaced `CloudRunJobRuntimeLauncher` (Cloud Run Jobs, cold start per execution)
+with `WorkerServiceRuntimeLauncher` targeting a persistent `iga-job-worker` Cloud Run
+Service (`min-instances: 1`, CPU always allocated). `CloudRunJobRuntimeLauncher` and
+`src/clients/cloudRunJobsClient.js` were deleted; `RUNTIME_CLOUD_RUN_JOB_NAME` was
+removed from `productionValidation.js` and replaced by `RUNTIME_WORKER_URL`. **This plan
+reflects that architecture.** Any reference to Cloud Run Jobs in earlier drafts of this
+plan is superseded by what follows.
+
+Separately, `scripts/prod/{preflight,bootstrap-prod,teardown}.js` already implement a
+correct, idempotent, manifest-tracked seed/validate/teardown loop for the *application
+data layer* (Elasticsearch indices, Postgres schema via migrations). That tooling needs
+one change: `preflight.js` still checks for `RUNTIME_CLOUD_RUN_JOB_NAME` (Step 8.11
+fixes that).
+
+Two facts, found while designing this plan, that shape it materially:
+
+- `src/clients/pgClient.js`'s Cloud SQL connector call defaults `ipType` to `"PRIVATE"`.
+  Unless overridden (which would be a real security regression for an IGA system — not
+  done here), the Cloud SQL instance needs a private IP, which needs a VPC, Private
+  Service Access peering, and the Cloud Run *scheduler service* needs VPC connectivity
+  to reach it. This is a genuine prerequisite, not an add-on. The worker service does
+  NOT need the VPC connector — it doesn't connect to Cloud SQL directly; it runs job
+  subprocesses that call back to the scheduler service over public Cloud Run URLs.
+- Auth to Postgres is password-based (`password: env.DB_PASSWORD` in the pool config),
+  not IAM database auth. Secret Manager needs to hold a DB password, not just
+  `IGA_CLIENT_SECRET`.
+- There is currently no dedicated service account for the Cloud Run *service* itself —
+  Buildpacks source-deploy (`gcloud run deploy --source .`) defaults to the Compute
+  Engine default service account if none is specified, which is broader-privileged than
+  it should be for a service holding governance data. This plan adds one.
+
+Depends on: nothing code-side. Independent of plans 1–7 from an infrastructure
+perspective, but plan 7's `cloudbuild.yaml` deploy steps have nothing to target until
+this plan's resources exist.
+
+## Assumptions
+
+- Postgres auth stays password-based, matching `pgClient.js` as written — not changing
+  application code to support IAM DB auth in this plan (out of scope; a future
+  simplification, not blocking).
+- `DB_IP_TYPE` is **not** set to `PUBLIC` anywhere — the private-IP path is kept as the
+  default, correct choice. This plan provisions the VPC/PSA/connector needed to support
+  it for the scheduler service.
+- Networking approach: a Serverless VPC Access connector (well-established, broadly
+  compatible) rather than Direct VPC Egress (newer, cheaper, but adds another moving
+  part to a system that has no VPC today). Revisit later if cost matters.
+- Cloud SQL: regional HA (`availability_type = "REGIONAL"`), per the already-locked
+  architecture decision. AlloyDB (`DB_ENGINE=direct` + Auth Proxy sidecar) is not
+  provisioned here — it's a switchable target per existing docs, not the default path.
+- One Artifact Registry Docker repository holds the worker service image — single image,
+  single repo. After plan 6 + plan 7, this image contains both the Node.js runtime and
+  Python 3.11/3.12 binaries; `JobRuntimeExecutor` selects the correct interpreter per job.
+- The worker service (`iga-job-worker`) executes Node.js jobs as local child processes (and Python jobs after plan 6 completes).
+  It needs GCS access (artifact download) and the ability to call the scheduler service's
+  `RUNTIME_BROKER_URL` (for IGA proxy and completion callbacks) — both are public HTTPS
+  endpoints, no VPC connector needed for the worker.
+- The Cloud Run *scheduler service* and *worker service* are not Terraform-managed in
+  this plan (both are deployed via `gcloud run deploy` in plan 7's `cloudbuild.yaml`
+  pipeline). Terraform provisions the service account and IAM; the actual deploy lives in
+  the CI/CD pipeline.
+- Secret Manager holds secret *resources* + IAM bindings, not secret *values* — actual
+  values (`IGA_CLIENT_SECRET`, the generated DB password) are set out-of-band after
+  `terraform apply`. The DB password is generated by `random_password` and written as an
+  initial version by Terraform (this one value is fine to originate here) — everything
+  else stays a bring-your-own-value secret shell.
+- Same `runtime` service account (`RUNTIME_SERVICE_ACCOUNT_EMAIL`) runs the worker
+  service. It needs `roles/storage.objectViewer` on the artifact bucket (to download
+  job ZIPs) and `roles/run.invoker` on the scheduler service (to call back to
+  `/complete` and `/internal/runtime/iga/request`).
+
+## Out of Scope
+
+- Running `terraform init`, `plan`, or `apply` for real. This sandbox can't reach
+  `registry.terraform.io` anyway — these files are written and structurally reviewed,
+  not executed.
+- AlloyDB provisioning and the sidecar-container question for the Cloud Run service.
+  Cloud SQL for PostgreSQL is the only supported `DB_ENGINE=cloud-sql` path this plan
+  builds for; `DB_ENGINE=direct` remains schema-valid in the application code but has
+  no infrastructure behind it here.
+- IAM DB authentication (switching away from password auth).
+- Direct VPC Egress as an alternative to the Serverless VPC Access connector.
+- Python job runtime *Terraform resources*. Plan 6 adds Python support to
+  `JobRuntimeExecutor` and a Python SDK (application code only — no new infra). No
+  `python_runtime_*` variables, resources, or IAM bindings appear in this plan because
+  none are needed: Python executes inside the same `iga-job-worker` worker service image
+  once plan 7's Dockerfile installs Python binaries alongside Node.
+- Installing the "Google Cloud Build" GitHub App on the repository — this is an
+  interactive GitHub-side consent flow, not a GCP resource Terraform can create. Step
+  8.14 documents it as a manual prerequisite.
+
+## Stop Condition
+
+All `.tf` files written and internally consistent (variable references resolve, no
+typos in resource cross-references — verified by careful reading, since `terraform
+validate` can't run in this sandbox). `preflight.js`'s new check follows the existing
+file's structure and section numbering is corrected throughout. No `terraform`,
+`gcloud`, or `docker` command actually executed.
+
+---
+
+## Step 8.1 — `terraform/versions.tf`: remote state backend
+
+**File:** `terraform/versions.tf`
+
+Add a partial GCS backend block (bucket supplied at `init` time via
+`-backend-config`, not hardcoded — differs per environment):
+
+```hcl
+terraform {
+  required_version = ">= 1.5.0"
+
+  backend "gcs" {
+    # terraform init -backend-config="bucket=<your-tfstate-bucket>" -backend-config="prefix=iga-scheduler"
+  }
+
+  required_providers {
+    google = {
+      source  = "hashicorp/google"
+      version = ">= 5.0"
+    }
+    random = {
+      source  = "hashicorp/random"
+      version = ">= 3.6"
+    }
+  }
+}
+```
+
+### Acceptance criteria
+
+- Backend block present, empty (partial config — no bucket name committed).
+- `random` provider added (needed for the generated DB password in Step 8.4).
+
+## Step 8.2 — `terraform/networking.tf`
+
+**File:** `terraform/networking.tf` (new)
+
+```hcl
+resource "google_project_service" "servicenetworking" {
+  project            = var.project_id
+  service            = "servicenetworking.googleapis.com"
+  disable_on_destroy = false
+}
+
+resource "google_project_service" "vpcaccess" {
+  project            = var.project_id
+  service            = "vpcaccess.googleapis.com"
+  disable_on_destroy = false
+}
+
+resource "google_compute_network" "main" {
+  project                 = var.project_id
+  name                    = var.vpc_name
+  auto_create_subnetworks = false
+}
+
+resource "google_compute_subnetwork" "connector" {
+  project       = var.project_id
+  name          = "${var.vpc_name}-connector-subnet"
+  region        = var.region
+  network       = google_compute_network.main.id
+  ip_cidr_range = var.vpc_connector_cidr
+}
+
+resource "google_compute_global_address" "private_service_range" {
+  project       = var.project_id
+  name          = "${var.vpc_name}-psa-range"
+  purpose       = "VPC_PEERING"
+  address_type  = "INTERNAL"
+  prefix_length = 16
+  network       = google_compute_network.main.id
+}
+
+resource "google_service_networking_connection" "private_service_access" {
+  network                 = google_compute_network.main.id
+  service                 = "servicenetworking.googleapis.com"
+  reserved_peering_ranges = [google_compute_global_address.private_service_range.name]
+  depends_on              = [google_project_service.servicenetworking]
+}
+
+resource "google_vpc_access_connector" "scheduler" {
+  project       = var.project_id
+  name          = var.vpc_connector_name
+  region        = var.region
+  subnet {
+    name = google_compute_subnetwork.connector.name
+  }
+  min_instances = 2
+  max_instances = 3
+  depends_on    = [google_project_service.vpcaccess]
+}
+```
+
+### Acceptance criteria
+
+- Private Service Access peering range and connection precede the Cloud SQL instance
+  (Step 8.3) — `google_sql_database_instance` must `depends_on` the
+  `google_service_networking_connection`, or Cloud SQL creation will fail with private
+  networking not yet configured.
+- VPC connector subnet CIDR (`var.vpc_connector_cidr`) doesn't overlap the PSA range —
+  document this constraint on the variable itself (Step 8.9).
+- The connector is attached only to the *scheduler service* deploy step (plan 7 Step
+  7.2, `cloudbuild.yaml`) — the worker service deploy does not receive `--vpc-connector`.
+
+## Step 8.3 — `terraform/cloudsql.tf`
+
+**File:** `terraform/cloudsql.tf` (new)
+
+```hcl
+resource "google_project_service" "sqladmin" {
+  project            = var.project_id
+  service            = "sqladmin.googleapis.com"
+  disable_on_destroy = false
+}
+
+resource "random_password" "db_password" {
+  length  = 32
+  special = false
+}
+
+resource "google_sql_database_instance" "main" {
+  project             = var.project_id
+  name                = var.db_instance_name
+  region              = var.region
+  database_version    = var.db_version
+  deletion_protection = var.db_deletion_protection
+
+  settings {
+    tier              = var.db_tier
+    availability_type = "REGIONAL"
+
+    ip_configuration {
+      ipv4_enabled    = false
+      private_network = google_compute_network.main.id
+    }
+
+    backup_configuration {
+      enabled                        = true
+      point_in_time_recovery_enabled = true
+    }
+  }
+
+  depends_on = [
+    google_project_service.sqladmin,
+    google_service_networking_connection.private_service_access
+  ]
+}
+
+resource "google_sql_database" "app" {
+  project  = var.project_id
+  instance = google_sql_database_instance.main.name
+  name     = var.db_name
+}
+
+resource "google_sql_user" "app" {
+  project  = var.project_id
+  instance = google_sql_database_instance.main.name
+  name     = var.db_user
+  password = random_password.db_password.result
+}
+```
+
+### Acceptance criteria
+
+- `availability_type = "REGIONAL"` matches the locked architecture decision.
+- `ipv4_enabled = false` + `private_network` — no public IP, matches the
+  `DB_IP_TYPE=PRIVATE` assumption in `pgClient.js`.
+- `db_deletion_protection` defaults `true` (Step 8.9) — a stray `terraform destroy`
+  shouldn't be able to delete the database without an explicit variable override.
+
+## Step 8.4 — `terraform/secrets.tf`
+
+**File:** `terraform/secrets.tf` (new)
+
+```hcl
+resource "google_project_service" "secretmanager" {
+  project            = var.project_id
+  service            = "secretmanager.googleapis.com"
+  disable_on_destroy = false
+}
+
+resource "google_secret_manager_secret" "db_password" {
+  project   = var.project_id
+  secret_id = "iga-scheduler-db-password"
+  replication {
+    auto {}
+  }
+  depends_on = [google_project_service.secretmanager]
+}
+
+resource "google_secret_manager_secret_version" "db_password" {
+  secret      = google_secret_manager_secret.db_password.id
+  secret_data = random_password.db_password.result
+}
+
+resource "google_secret_manager_secret" "iga_client_secret" {
+  project   = var.project_id
+  secret_id = "iga-scheduler-iga-client-secret"
+  replication {
+    auto {}
+  }
+  depends_on = [google_project_service.secretmanager]
+}
+
+resource "google_secret_manager_secret" "es_api_key" {
+  project   = var.project_id
+  secret_id = "iga-scheduler-es-api-key"
+  replication {
+    auto {}
+  }
+  depends_on = [google_project_service.secretmanager]
+}
+
+resource "google_secret_manager_secret" "github_token" {
+  project   = var.project_id
+  secret_id = "iga-scheduler-github-token"
+  replication {
+    auto {}
+  }
+  depends_on = [google_project_service.secretmanager]
+}
+
+# No google_secret_manager_secret_version for iga_client_secret, es_api_key, or
+# github_token — all three values are set out-of-band (`gcloud secrets versions add
+# <secret-id> --data-file=-`) after apply. Terraform manages the secret shells and IAM
+# only. github_token is a GitHub Personal Access Token with repo read access, used by
+# Step 8.14's Cloud Build connection to authenticate to GitHub.
+```
+
+### Acceptance criteria
+
+- `iga_client_secret`, `es_api_key`, and `github_token` have no version resource in
+  Terraform — confirms no external credential ever enters Terraform state.
+- `db_password` does have a version, generated by `random_password` — the one value
+  that's fine to originate here (see Assumptions).
+
+## Step 8.5 — `terraform/storage.tf`
+
+**File:** `terraform/storage.tf` (new)
+
+`JOB_ZIP_BUCKET` is a required production env var (`productionValidation.js`) and is
+where `JobDefinitionService` stores job artifact ZIPs. `JobRuntimeExecutor` (running
+inside the worker service) downloads them at dispatch time.
+
+```hcl
+resource "google_storage_bucket" "job_zip" {
+  project                     = var.project_id
+  name                        = var.job_zip_bucket_name
+  location                    = var.region
+  uniform_bucket_level_access = true
+  force_destroy               = false
+
+  versioning {
+    enabled = true
+  }
+
+  lifecycle_rule {
+    condition {
+      num_newer_versions = 5
+    }
+    action {
+      type = "Delete"
+    }
+  }
+}
+```
+
+`versioning` + a 5-versions-retained lifecycle rule: job artifact ZIPs are referenced by
+`generation` number at dispatch time, so overwriting a definition's artifact shouldn't
+invalidate an in-flight run that captured an older generation. Unbounded version
+retention would grow the bucket indefinitely; 5 is a reasonable bound.
+
+`force_destroy = false`: a `terraform destroy` shouldn't silently delete every job
+artifact ever uploaded.
+
+### Acceptance criteria
+
+- `google_storage_bucket.job_zip` exists and matches the name `service_accounts.tf`'s
+  IAM bindings (Step 8.7) already reference.
+- `var.job_zip_bucket_name` added to `variables.tf` (Step 8.9).
+
+## Step 8.6 — `terraform/artifact_registry.tf`
+
+**File:** `terraform/artifact_registry.tf` (new)
+
+```hcl
+resource "google_project_service" "artifactregistry" {
+  project            = var.project_id
+  service            = "artifactregistry.googleapis.com"
+  disable_on_destroy = false
+}
+
+resource "google_artifact_registry_repository" "runtime_images" {
+  project       = var.project_id
+  location      = var.region
+  repository_id = var.artifact_registry_repo_id
+  format        = "DOCKER"
+  description   = "IGA job worker service container image."
+  depends_on    = [google_project_service.artifactregistry]
+}
+```
+
+### Acceptance criteria
+
+- Single repo — `iga-job-worker` image (plan 7's `cloudbuild.yaml`) pushes here.
+- No separate Python runtime image resource — Python runs inside the same worker image
+  (plan 7 installs Python binaries in the worker Dockerfile).
+
+## Step 8.7 — `terraform/service_accounts.tf`: additions
+
+**File:** `terraform/scheduler.tf` already has the two scheduler-tick SAs; this new
+file adds the three that are actually missing from the repo.
+
+```hcl
+resource "google_service_account" "scheduler_service" {
+  project      = var.project_id
+  account_id   = var.scheduler_service_account_id
+  display_name = "IGA Scheduler service identity"
+  description  = "Runs the Cloud Run scheduler service. Distinct from the invoker SAs, which only call it."
+}
+
+resource "google_service_account" "runtime" {
+  project      = var.project_id
+  account_id   = var.runtime_service_account_id
+  display_name = "IGA Scheduler job runtime identity"
+  description  = "Runs the iga-job-worker Cloud Run Service; calls back to /complete and the IGA bridge proxy."
+}
+
+resource "google_service_account" "deployer" {
+  project      = var.project_id
+  account_id   = var.deployer_service_account_id
+  display_name = "IGA Scheduler CI/CD deployer"
+  description  = "Used by the Cloud Build pipeline to push images and deploy Cloud Run resources."
+}
+
+# ── scheduler_service: Cloud SQL + secrets + GCS + invoke worker ───────────────
+
+resource "google_project_iam_member" "scheduler_service_cloudsql" {
+  project = var.project_id
+  role    = "roles/cloudsql.client"
+  member  = "serviceAccount:${google_service_account.scheduler_service.email}"
+}
+
+resource "google_secret_manager_secret_iam_member" "scheduler_service_db_password" {
+  secret_id = google_secret_manager_secret.db_password.secret_id
+  project   = var.project_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.scheduler_service.email}"
+}
+
+resource "google_secret_manager_secret_iam_member" "scheduler_service_iga_secret" {
+  secret_id = google_secret_manager_secret.iga_client_secret.secret_id
+  project   = var.project_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.scheduler_service.email}"
+}
+
+resource "google_secret_manager_secret_iam_member" "scheduler_service_es_api_key" {
+  secret_id = google_secret_manager_secret.es_api_key.secret_id
+  project   = var.project_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.scheduler_service.email}"
+}
+
+resource "google_storage_bucket_iam_member" "scheduler_service_gcs" {
+  bucket = google_storage_bucket.job_zip.name
+  role   = "roles/storage.objectAdmin"
+  member = "serviceAccount:${google_service_account.scheduler_service.email}"
+}
+
+# WorkerServiceRuntimeLauncher POSTs { runId, execution, context } to the worker
+# service's /execute endpoint using an OIDC token from the GCP metadata server.
+# roles/run.invoker on the specific worker service (not project-wide) is sufficient.
+resource "google_cloud_run_v2_service_iam_member" "scheduler_service_invoke_worker" {
+  project  = var.project_id
+  location = var.region
+  name     = google_cloud_run_v2_service.worker.name
+  role     = "roles/run.invoker"
+  member   = "serviceAccount:${google_service_account.scheduler_service.email}"
+}
+
+# ── runtime: GCS read + callback invocation ────────────────────────────────────
+
+# JobRuntimeExecutor (running inside the worker service) downloads job ZIP artifacts
+# from GCS at dispatch time using Application Default Credentials from this SA.
+resource "google_storage_bucket_iam_member" "runtime_gcs_read" {
+  bucket = google_storage_bucket.job_zip.name
+  role   = "roles/storage.objectViewer"
+  member = "serviceAccount:${google_service_account.runtime.email}"
+}
+
+# The job subprocess calls BrokerIgaClient which POSTs to RUNTIME_BROKER_URL
+# (the scheduler service's /internal/runtime/iga/request and /complete endpoints).
+# Cloud Run to Cloud Run over HTTPS — only roles/run.invoker is needed.
+resource "google_cloud_run_service_iam_member" "runtime_invoker" {
+  project  = var.project_id
+  location = var.region
+  service  = var.cloud_run_service_name
+  role     = "roles/run.invoker"
+  member   = "serviceAccount:${google_service_account.runtime.email}"
+}
+
+# ── deployer: push images, deploy Cloud Run resources, act-as runtime SA ──────
+
+resource "google_artifact_registry_repository_iam_member" "deployer_push" {
+  project    = var.project_id
+  location   = var.region
+  repository = google_artifact_registry_repository.runtime_images.repository_id
+  role       = "roles/artifactregistry.writer"
+  member     = "serviceAccount:${google_service_account.deployer.email}"
+}
+
+resource "google_project_iam_member" "deployer_run_admin" {
+  project = var.project_id
+  role    = "roles/run.admin"
+  member  = "serviceAccount:${google_service_account.deployer.email}"
+}
+
+resource "google_project_iam_member" "deployer_builds_builder" {
+  project = var.project_id
+  role    = "roles/cloudbuild.builds.builder"
+  member  = "serviceAccount:${google_service_account.deployer.email}"
+}
+
+resource "google_project_iam_member" "deployer_log_writer" {
+  project = var.project_id
+  role    = "roles/logging.logWriter"
+  member  = "serviceAccount:${google_service_account.deployer.email}"
+}
+
+resource "google_service_account_iam_member" "deployer_actas_runtime" {
+  service_account_id = google_service_account.runtime.name
+  role               = "roles/iam.serviceAccountUser"
+  member             = "serviceAccount:${google_service_account.deployer.email}"
+}
+
+resource "google_service_account_iam_member" "deployer_actas_scheduler_service" {
+  service_account_id = google_service_account.scheduler_service.name
+  role               = "roles/iam.serviceAccountUser"
+  member             = "serviceAccount:${google_service_account.deployer.email}"
+}
+
+resource "google_storage_bucket_iam_member" "deployer_state_read" {
+  bucket = var.tf_state_bucket_name
+  role   = "roles/storage.objectViewer"
+  member = "serviceAccount:${google_service_account.deployer.email}"
+}
+```
+
+**No custom role, no `run.jobs.*` bindings.** Plan 6 deleted `CloudRunJobRuntimeLauncher`
+and `cloudRunJobsClient.js`; the Cloud Run Jobs API is never called. `scheduler_service`
+now needs only `roles/run.invoker` on the worker *service* — granted per-resource, not
+project-wide.
+
+### Acceptance criteria
+
+- Three new service accounts, none reusing an existing account_id.
+- `scheduler_service` SA has Cloud SQL, three secrets, GCS objectAdmin, and
+  `roles/run.invoker` on the worker service. No project-wide Cloud Run grant.
+- No `google_project_iam_custom_role.run_job_executor` resource exists.
+- No `google_cloud_run_v2_job_iam_member.*` resources exist.
+- `runtime` SA has GCS objectViewer (artifact download) and `roles/run.invoker` on the
+  scheduler service (callback path).
+- `deployer` SA can push to Artifact Registry and deploy Cloud Run resources, and can
+  act-as both the `runtime` and `scheduler_service` SAs.
+
+## Step 8.8 — `terraform/worker_service.tf`
+
+Replaces the deleted `cloud_run_jobs.tf` concept. Provisions `iga-job-worker` as a
+Cloud Run Service (not a Job) — a long-lived service with `min-instances: 1` and CPU
+always allocated, matching plan 6's `WorkerServiceRuntimeLauncher` target.
+
+**File:** `terraform/worker_service.tf` (new)
+
+```hcl
+resource "google_project_service" "run" {
+  project            = var.project_id
+  service            = "run.googleapis.com"
+  disable_on_destroy = false
+}
+
+resource "google_cloud_run_v2_service" "worker" {
+  project  = var.project_id
+  name     = var.worker_service_name
+  location = var.region
+
+  template {
+    service_account = google_service_account.runtime.email
+
+    # Give the SIGTERM handler time to drain active job subprocesses before
+    # Cloud Run terminates the instance. Set to worker_max_drain_seconds, which
+    # should equal (WORKER_MAX_TIMEOUT_SECONDS + 30) * 1000 ms from workerApp.js.
+    timeout = "${var.worker_max_drain_seconds}s"
+
+    scaling {
+      min_instance_count = var.worker_service_min_instances
+      max_instance_count = 10
+    }
+
+    containers {
+      image = var.worker_placeholder_image
+
+      resources {
+        limits = {
+          cpu    = var.worker_service_cpu
+          memory = var.worker_service_memory
+        }
+        # CPU always allocated — prevents scale-to-zero and eliminates cold starts
+        # for subsequent requests after the first.
+        cpu_idle = false
+      }
+
+      env {
+        name  = "WORKER_EXECUTION_MODE"
+        value = "local"
+      }
+
+      env {
+        name  = "GCP_PROJECT_ID"
+        value = var.project_id
+      }
+    }
+  }
+
+  lifecycle {
+    ignore_changes = [template[0].containers[0].image]
+  }
+
+  depends_on = [google_project_service.run]
+}
+```
+
+`var.worker_placeholder_image` defaults to
+`us-docker.pkg.dev/cloudrun/container/hello` — Google's standard Cloud Run Service
+placeholder. `terraform apply` succeeds before Cloud Build has ever pushed a real image.
+`lifecycle.ignore_changes` on the image field means every real image update comes from
+`cloudbuild.yaml`'s `gcloud run deploy`, not from a `terraform apply`.
+
+`WORKER_EXECUTION_MODE=local` is set at the Terraform level as a sanity anchor — the
+worker service is itself the executor, not delegating to a further nested system. Secrets
+and the remaining env vars (`RUNTIME_BROKER_URL`, `JOB_ZIP_BUCKET`, etc.) are provided
+by the CI/CD deploy step via `--set-env-vars`/`--set-secrets` rather than hardcoded here.
+
+The worker service does **not** receive a VPC connector attachment. It calls GCS (public
+Google API) and the scheduler service (public Cloud Run URL) — no private network needed.
+Only the scheduler service attaches the VPC connector (to reach Cloud SQL's private IP).
+
+### Acceptance criteria
+
+- `google_cloud_run_v2_service.worker` exists (not `v2_job`).
+- `min_instance_count = var.worker_service_min_instances` (default 1) — prevents
+  scale-to-zero, matches plan 6's `min-instances: 1` decision.
+- `cpu_idle = false` — CPU always allocated between requests, eliminates cold-start
+  latency for job dispatch.
+- `timeout` set to `worker_max_drain_seconds` — gives SIGTERM handler (`workerApp.js`'s
+  `app.drain()`) time to wait for active subprocesses before Cloud Run terminates.
+- `ignore_changes` path matches `google_cloud_run_v2_service`'s image field — verify
+  against the provider docs at implementation time.
+- No VPC connector attachment on the worker service.
+- `cloud_run_jobs.tf` does NOT exist in the repo.
+- `worker_service_memory` default (`512Mi`) is sufficient for a single in-flight job
+  artifact download (plan 6 Step 6.1 downloads the ZIP into memory before extracting).
+  Tune upward if jobs have large artifacts or multiple concurrent executions are expected
+  — the memory limit applies to the worker container, not individual subprocesses.
+
+## Step 8.9 — `terraform/variables.tf`: additions
+
+New variables needed by Steps 8.2–8.8, following the existing file's regex-validation
+style:
+
+```hcl
+variable "vpc_name" {
+  type    = string
+  default = "iga-scheduler-vpc"
+}
+
+variable "vpc_connector_name" {
+  type    = string
+  default = "iga-scheduler-connector"
+}
+
+variable "vpc_connector_cidr" {
+  description = "Must not overlap the Private Service Access range (10.x.0.0/16 reserved separately)."
+  type        = string
+  default     = "10.8.0.0/28"
+}
+
+variable "db_instance_name" {
+  type    = string
+  default = "iga-scheduler-db"
+}
+
+variable "db_version" {
+  type    = string
+  default = "POSTGRES_15"
+}
+
+variable "db_tier" {
+  type    = string
+  default = "db-custom-2-8192"
+}
+
+variable "db_name" {
+  type    = string
+  default = "iga_scheduler"
+}
+
+variable "db_user" {
+  type    = string
+  default = "iga_scheduler_app"
+}
+
+variable "db_deletion_protection" {
+  type    = bool
+  default = true
+}
+
+variable "tf_state_bucket_name" {
+  description = "GCS bucket holding this root's remote state (versions.tf backend config). Needed here only to grant the deployer SA read access to it — Terraform can't manage IAM on the bucket that stores its own state as a resource inside that same state, so this is a plain string, not a resource reference."
+  type        = string
+}
+
+variable "job_zip_bucket_name" {
+  type    = string
+  default = "iga-scheduler-job-zips"
+}
+
+variable "artifact_registry_repo_id" {
+  type    = string
+  default = "iga-scheduler"
+}
+
+variable "scheduler_service_account_id" {
+  type    = string
+  default = "iga-scheduler-service"
+}
+
+variable "runtime_service_account_id" {
+  type    = string
+  default = "iga-scheduler-runtime"
+}
+
+variable "deployer_service_account_id" {
+  type    = string
+  default = "iga-scheduler-deployer"
+}
+
+variable "worker_service_name" {
+  type    = string
+  default = "iga-scheduler-worker"
+}
+
+variable "worker_service_min_instances" {
+  description = "Minimum number of worker service instances. Set to at least 1 to prevent scale-to-zero and eliminate cold starts."
+  type        = number
+  default     = 1
+}
+
+variable "worker_max_drain_seconds" {
+  description = "Cloud Run shutdown timeout for the worker service. Must be >= WORKER_MAX_TIMEOUT_SECONDS + 30 to allow in-flight job subprocesses to finish before SIGKILL. Matches workerApp.js maxDrainMs = (WORKER_MAX_TIMEOUT_SECONDS + 30) * 1000."
+  type        = number
+  default     = 1860
+}
+
+variable "worker_service_cpu" {
+  type    = string
+  default = "1"
+}
+
+variable "worker_service_memory" {
+  type    = string
+  default = "512Mi"
+}
+
+variable "worker_placeholder_image" {
+  description = "Placeholder image for the worker service on first terraform apply, before Cloud Build has pushed a real image. lifecycle.ignore_changes prevents subsequent applies from reverting a real image to this placeholder."
+  type        = string
+  default     = "us-docker.pkg.dev/cloudrun/container/hello"
+}
+
+variable "github_owner" {
+  type    = string
+  default = "srallapally"
+}
+
+variable "github_repo_name" {
+  type    = string
+  default = "iga-scheduler-backend"
+}
+
+variable "github_app_installation_id" {
+  description = "From installing the 'Google Cloud Build' GitHub App on the repo (github.com/apps/google-cloud-build) — a one-time manual step, see Step 8.14. Not knowable until that step happens, no sensible default."
+  type        = string
+}
+
+variable "scheduler_service_url" {
+  description = "Set to empty on first apply. After the first pipeline run creates the scheduler service, capture its URL and re-apply with this set — same bootstrap pattern the existing terraform/scheduler.tf already uses for cloud_run_service_url."
+  type        = string
+  default     = ""
+}
+
+variable "worker_service_url" {
+  description = "Set to empty on first apply. After the first pipeline run deploys the worker service, capture its URL and re-apply — feeds _RUNTIME_WORKER_URL in the CI trigger's substitutions block."
+  type        = string
+  default     = ""
+}
+
+variable "scheduler_service_name" {
+  type    = string
+  default = "iga-scheduler"
+}
+
+# ── Externally-sourced config (Elasticsearch, the IGA platform, PingOne) ────────
+# No defaults, deliberately — Terraform can't know these, and a silent default here
+# would be worse than a required-variable error at plan time.
+
+variable "es_endpoint" {
+  type = string
+}
+
+variable "iga_token_endpoint" {
+  type = string
+}
+
+variable "iga_client_id" {
+  type = string
+}
+
+variable "iga_base_url" {
+  type = string
+}
+
+variable "public_api_issuer" {
+  type = string
+}
+
+variable "public_api_audience" {
+  type = string
+}
+```
+
+`db_name`/`db_user` defaults match `.env.example` exactly (`iga_scheduler`,
+`iga_scheduler_app`). `worker_max_drain_seconds = 1860` matches `workerApp.js`'s
+`maxDrainMs = (WORKER_MAX_TIMEOUT_SECONDS + 30) * 1000` with `WORKER_MAX_TIMEOUT_SECONDS`
+defaulting to 1800s (30 min).
+
+### Acceptance criteria
+
+- No variable name collides with the existing `variables.tf`.
+- No `js_runtime_job_name`, `python_runtime_job_name`, `runtime_job_timeout_seconds`,
+  `runtime_job_cpu`, `runtime_job_memory`, or `placeholder_image` variables — these
+  belonged to the deleted Cloud Run Jobs concept.
+- Defaults are usable as-is for a first `plan`.
+
+## Step 8.10 — `terraform/outputs.tf`: additions
+
+```hcl
+output "db_instance_connection_name" {
+  value = google_sql_database_instance.main.connection_name
+}
+
+output "vpc_connector_id" {
+  value = google_vpc_access_connector.scheduler.id
+}
+
+output "runtime_service_account_email" {
+  value = google_service_account.runtime.email
+}
+
+output "scheduler_service_account_email" {
+  value = google_service_account.scheduler_service.email
+}
+
+output "deployer_service_account_email" {
+  value = google_service_account.deployer.email
+}
+
+output "artifact_registry_repo_url" {
+  value = "${var.region}-docker.pkg.dev/${var.project_id}/${google_artifact_registry_repository.runtime_images.repository_id}"
+}
+
+output "job_zip_bucket_name" {
+  value = google_storage_bucket.job_zip.name
+}
+
+output "worker_service_name" {
+  value = google_cloud_run_v2_service.worker.name
+}
+```
+
+These feed into: `DB_INSTANCE_CONNECTION_NAME`, the scheduler service's
+`gcloud run deploy --vpc-connector=... --service-account=...` flags, `RUNTIME_SERVICE_ACCOUNT_EMAIL`,
+image tags, and the `worker_service_name` needed to construct `RUNTIME_WORKER_URL` after
+first deploy. `RUNTIME_WORKER_URL` itself can't be a Terraform output until the service
+is deployed — follow the same `var.worker_service_url` bootstrap pattern as
+`var.scheduler_service_url` (empty on first apply, set manually after first pipeline run,
+re-applied to wire the CI trigger substitution).
+
+### Acceptance criteria
+
+- No `js_runtime_job_name` or `python_runtime_job_name` outputs.
+- `worker_service_name` output present, value sourced from
+  `google_cloud_run_v2_service.worker.name`.
+
+## Step 8.11 — `preflight.js`: fix env var + add worker service health check
+
+**File:** `scripts/prod/preflight.js`
+
+Two changes:
+
+**1. Fix `RUNTIME_REQUIRED` array (line 71–80).**
+
+`RUNTIME_CLOUD_RUN_JOB_NAME` was removed from `productionValidation.js` in plan 6 and
+replaced by `RUNTIME_WORKER_URL`. The preflight env-var check still references the old
+name — update it:
+
+```js
+  const RUNTIME_REQUIRED = [
+    "WORKER_EXECUTION_MODE",
+    "RUNTIME_WORKER_URL",
+    "RUNTIME_SERVICE_ACCOUNT_EMAIL",
+    "RUNTIME_BROKER_URL",
+    "IGA_TOKEN_ENDPOINT",
+    "IGA_CLIENT_ID",
+    "IGA_CLIENT_SECRET",
+    "IGA_BASE_URL",
+  ];
+```
+
+**2. Insert a new numbered section between the existing GCS check ("4 / 6") and
+Secret Manager ("5 / 6"), renumbering every section header in the file from `/6` to
+`/7` (local mode's `/2` headers are unaffected).**
+
+```js
+  // ─── 5 / 7  Worker Service ───────────────────────────────────────────────────
+
+  header("5 / 7  Worker Service");
+
+  const workerUrl = env("RUNTIME_WORKER_URL");
+  if (!workerUrl) {
+    fault("worker-service", "RUNTIME_WORKER_URL not set — required in production");
+  } else {
+    const elapsed = stopwatch();
+    try {
+      const res = await fetch(`${workerUrl}/health`, { signal: AbortSignal.timeout(5000) });
+      const json = await res.json();
+      if (res.ok && json.status === "ok") {
+        pass("worker-service", `worker service healthy at ${workerUrl} (${elapsed()})`);
+      } else {
+        fault("worker-service", `worker service /health returned unexpected response: ${JSON.stringify(json)}`);
+      }
+    } catch (e) {
+      fault("worker-service", `worker service unreachable at ${workerUrl}: ${e.message}`);
+    }
+  }
+```
+
+No import needed — plain `fetch`. The worker service's `GET /health` returns
+`{ status: "ok" }` (implemented in plan 6's `workerApp.js`).
+
+All other section headers change from `/6` to `/7`:
+- `1 / ${IS_LOCAL ? 2 : 6}` → `1 / ${IS_LOCAL ? 2 : 7}`
+- `2 / 6` → `2 / 7`
+- `3 / 6` → `3 / 7`
+- `4 / 6` → `4 / 7`
+- `6 / 6` → now `6 / 7` (Secret Manager) and `7 / 7` (OAuth AS JWKS)
+- The final `${IS_LOCAL ? 2 : 6} / ${IS_LOCAL ? 2 : 6}` line → `${IS_LOCAL ? 2 : 7} / ${IS_LOCAL ? 2 : 7}`
+
+### Acceptance criteria
+
+- `RUNTIME_CLOUD_RUN_JOB_NAME` does not appear anywhere in `preflight.js` after this step.
+- `RUNTIME_WORKER_URL` is checked in the env-var section and probed via `/health` in
+  the new section 5 / 7.
+- A configured but unreachable `RUNTIME_WORKER_URL` fails preflight with a clear message.
+- All section number tokens in the file are internally consistent — no stray "4 / 6"
+  next to a new "5 / 7".
+
+## Step 8.12 — ~~`cloudRunJobsClient.js`: add `getJob`~~ (DELETED)
+
+`src/clients/cloudRunJobsClient.js` was deleted in plan 6. The `getJob` method this
+step originally described was never added. Step 8.11's worker service health check uses
+plain `fetch` — no client import needed.
+
+**This step is obsolete and should not be implemented.**
+
+## Step 8.13 — `scripts/prod/deploy.sh`: coordinating entrypoint
+
+**File:** `scripts/prod/deploy.sh` (new)
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+cd "$(dirname "$0")/../../terraform"
+terraform init -input=false
+terraform apply -input=false "$@"
+
+cd ..
+echo ""
+echo "Terraform apply complete. If Step 8.14's trigger is already set up, pushing to"
+echo "main now deploys automatically. For a manual/one-off run instead (also needed on"
+echo "the very first deploy, before the worker service has a real image):"
+echo "  gcloud builds submit --config=cloudbuild.yaml ."
+echo ""
+
+npm run preflight
+npm run bootstrap:prod
+```
+
+### Acceptance criteria
+
+- Script fails fast (`set -e`) at any stage — a failed `terraform apply` never reaches
+  `npm run bootstrap:prod`.
+- Passes through any `terraform apply` flags given to `deploy.sh` itself (e.g.
+  `-auto-approve` for CI).
+- No reference to `RUNTIME_CLOUD_RUN_JOB_NAME` or Cloud Run Jobs in the script.
+
+## Step 8.14 — `terraform/cicd.tf`: the trigger itself
+
+Closes the "nothing triggers the pipeline" gap.
+
+**The one piece this can't fully automate:** Cloud Build's GitHub 2nd-gen integration
+requires a one-time interactive step: installing the "Google Cloud Build" GitHub App on
+the repository. That produces an installation ID. Once done, everything downstream is
+Terraform-managed.
+
+**File:** `terraform/cicd.tf` (new)
+
+```hcl
+resource "google_project_service" "cloudbuild" {
+  project            = var.project_id
+  service            = "cloudbuild.googleapis.com"
+  disable_on_destroy = false
+}
+
+resource "google_cloudbuildv2_connection" "github" {
+  project  = var.project_id
+  location = var.region
+  name     = "iga-scheduler-github"
+
+  github_config {
+    app_installation_id = var.github_app_installation_id
+    authorizer_credential {
+      oauth_token_secret_version = "${google_secret_manager_secret.github_token.id}/versions/latest"
+    }
+  }
+
+  depends_on = [google_project_service.cloudbuild]
+}
+
+resource "google_cloudbuildv2_repository" "scheduler" {
+  project           = var.project_id
+  location          = var.region
+  name              = var.github_repo_name
+  parent_connection = google_cloudbuildv2_connection.github.name
+  remote_uri        = "https://github.com/${var.github_owner}/${var.github_repo_name}.git"
+}
+
+resource "google_cloudbuild_trigger" "on_push_main" {
+  project  = var.project_id
+  location = var.region
+  name     = "iga-scheduler-deploy"
+
+  repository_event_config {
+    repository = google_cloudbuildv2_repository.scheduler.id
+    push {
+      branch = "^main$"
+    }
+  }
+
+  filename        = "cloudbuild.yaml"
+  service_account = google_service_account.deployer.id
+
+  substitutions = {
+    _REGION                 = var.region
+    _REPO                   = var.artifact_registry_repo_id
+    _SCHEDULER_SERVICE_NAME = var.scheduler_service_name
+    _WORKER_SERVICE_NAME    = var.worker_service_name
+    _TF_STATE_BUCKET        = var.tf_state_bucket_name
+    _ES_ENDPOINT            = var.es_endpoint
+    _IGA_TOKEN_ENDPOINT     = var.iga_token_endpoint
+    _IGA_CLIENT_ID          = var.iga_client_id
+    _IGA_BASE_URL           = var.iga_base_url
+    _PUBLIC_API_ISSUER      = var.public_api_issuer
+    _PUBLIC_API_AUDIENCE    = var.public_api_audience
+    _SERVICE_URL            = var.scheduler_service_url
+    _RUNTIME_WORKER_URL     = var.worker_service_url
+  }
+}
+```
+
+`_RUNTIME_WORKER_URL` follows the same two-phase bootstrap as `_SERVICE_URL`: empty on
+first apply (before the worker service exists), then set to the actual Cloud Run URL
+after the first pipeline run deploys it, and re-applied.
+
+`cloudbuild.yaml` (plan 7 Step 7.2) deploys the worker service using
+`gcloud run deploy ${_WORKER_SERVICE_NAME}` (not `gcloud run jobs deploy`). The deploy
+step includes `--service-account` (from `terraform output runtime_service_account_email`)
+but does **not** include `--vpc-connector` (the worker service doesn't need private
+network access — only the scheduler service does).
+
+### Acceptance criteria
+
+- Push to `main` triggers a build using `cloudbuild.yaml` at the repo root, running as
+  `deployer`.
+- `substitutions` include `_RUNTIME_WORKER_URL` (not `_RUNTIME_CLOUD_RUN_JOB_NAME` or
+  any Python job name).
+- No `_RUNTIME_CLOUD_RUN_JOB_NAME`, `_RUNTIME_PYTHON_CLOUD_RUN_JOB_NAME`, or any
+  `python_runtime_*` substitution appears.
+- `github_token`'s secret value and the GitHub App installation are both established
+  *before* `terraform apply` is run against `cicd.tf`.
+
+---
+
+# Definition of Done
+
+```
+- terraform/{networking,cloudsql,storage,secrets,artifact_registry,worker_service,
+  service_accounts,cicd}.tf exist, cross-reference correctly, and are internally
+  consistent by inspection (not by terraform validate — unavailable in this sandbox).
+- cloud_run_jobs.tf does NOT exist (deleted concept — Cloud Run Jobs replaced by the
+  persistent worker Cloud Run Service in plan 6).
+- versions.tf has a remote GCS backend (partial config) and the random provider.
+- variables.tf / outputs.tf extended without colliding with existing definitions.
+  No js_runtime_job_name, python_runtime_job_name, runtime_job_timeout_seconds,
+  runtime_job_cpu, runtime_job_memory, or placeholder_image variables.
+- worker_service.tf provisions iga-job-worker as google_cloud_run_v2_service with
+  min_instance_count=1, cpu_idle=false, shutdown timeout matching worker_max_drain_seconds,
+  and lifecycle.ignore_changes on the image field.
+- service_accounts.tf grants scheduler_service roles/run.invoker on the worker service
+  (not a custom run.jobs.* role). No google_project_iam_custom_role.run_job_executor.
+- preflight.js: RUNTIME_CLOUD_RUN_JOB_NAME replaced by RUNTIME_WORKER_URL in the
+  RUNTIME_REQUIRED array; new section 5/7 checks worker service /health endpoint using
+  plain fetch; all section numbers consistent as /7 throughout.
+- Step 8.12 not implemented (cloudRunJobsClient.js was deleted in plan 6).
+- cicd.tf substitutions include _RUNTIME_WORKER_URL and _WORKER_SERVICE_NAME; no
+  _RUNTIME_CLOUD_RUN_JOB_NAME or python_runtime_* substitutions.
+- deploy.sh sequences terraform apply -> preflight -> bootstrap:prod cleanly.
+- No terraform/gcloud/docker command actually executed during this session.
+```

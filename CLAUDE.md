@@ -12,6 +12,10 @@ The repo is mid-replatform: run/instance coordination is moving from Elasticsear
 - [x] Plan 3 — Instances, tick, dispatch poller
 - [x] Plan 4 — Deletion pass
 - [x] Plan 5 — Public API auth (PingOne)
+- [x] Plan 6 (worker service) — Persistent worker Cloud Run Service, WorkerServiceRuntimeLauncher
+- [x] Plan 6 (python parity) — Python SDK, artifact GCS download, Python spawn support
+- [x] Plan 7 — Worker Dockerfile, cloudbuild.yaml
+- [x] Plan 8 — GCP infrastructure (Terraform), preflight.js, deploy.sh
 
 **Session rules:**
 - Execute exactly one plan per session, per its Stop Condition and Definition of Done. Do not start work from later plans.

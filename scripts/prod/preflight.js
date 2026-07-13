@@ -20,8 +20,9 @@
 //     2. Elasticsearch reachable and API key has sufficient permissions
 //     3. Postgres reachable (Cloud SQL connector or direct)
 //     4. GCS bucket exists and is accessible
-//     5. Secret Manager API reachable (if IGA_CLIENT_SECRET looks like a SM resource name)
-//     6. OAuth AS JWKS endpoint reachable
+//     5. Worker Service health check
+//     6. Secret Manager API reachable (if IGA_CLIENT_SECRET looks like a SM resource name)
+//     7. OAuth AS JWKS endpoint reachable
 
 import { ok, fail, warn, header, dim, requireEnv, env, stopwatch, applyCliDefaults } from "./lib.js";
 
@@ -37,7 +38,7 @@ function fault(section, msg) { fail(section, msg); failures++; }
 
 // ─── 1. Environment variables ─────────────────────────────────────────────────
 
-header(`1 / ${IS_LOCAL ? 2 : 6}  Environment variables`);
+header(`1 / ${IS_LOCAL ? 2 : 7}  Environment variables`);
 
 // These vars are required in every mode — local and production.
 const AUTH_REQUIRED = [
@@ -70,7 +71,7 @@ if (IS_LOCAL) {
 
   const RUNTIME_REQUIRED = [
     "WORKER_EXECUTION_MODE",
-    "RUNTIME_CLOUD_RUN_JOB_NAME",
+    "RUNTIME_WORKER_URL",
     "RUNTIME_SERVICE_ACCOUNT_EMAIL",
     "RUNTIME_BROKER_URL",
     "IGA_TOKEN_ENDPOINT",
@@ -128,7 +129,7 @@ if (!IS_LOCAL) {
 
   // ─── 2. Elasticsearch connectivity ─────────────────────────────────────────
 
-  header("2 / 6  Elasticsearch");
+  header("2 / 7  Elasticsearch");
 
   if (!env("ES_ENDPOINT") || !env("ES_API_KEY")) {
     warn("es", "skipped — ES_ENDPOINT or ES_API_KEY not set");
@@ -175,7 +176,7 @@ if (!IS_LOCAL) {
 
   // ─── 3. Postgres connectivity ───────────────────────────────────────────────
 
-  header("3 / 6  Postgres");
+  header("3 / 7  Postgres");
 
   const hasPgConfig = dbEngine === "cloud-sql"
     ? Boolean(env("DB_INSTANCE_CONNECTION_NAME") && env("DB_USER") && env("DB_NAME"))
@@ -218,7 +219,7 @@ if (!IS_LOCAL) {
 
   // ─── 4. GCS bucket ─────────────────────────────────────────────────────────
 
-  header("4 / 6  GCS bucket");
+  header("4 / 7  GCS bucket");
 
   const bucket = env("JOB_ZIP_BUCKET");
   if (!bucket) {
@@ -248,9 +249,31 @@ if (!IS_LOCAL) {
     }
   }
 
-  // ─── 5. Secret Manager reachability ────────────────────────────────────────
+  // ─── 5. Worker Service ───────────────────────────────────────────────────────
 
-  header("5 / 6  Secret Manager");
+  header("5 / 7  Worker Service");
+
+  const workerUrl = env("RUNTIME_WORKER_URL");
+  if (!workerUrl) {
+    fault("worker-service", "RUNTIME_WORKER_URL not set — required in production");
+  } else {
+    const elapsed = stopwatch();
+    try {
+      const res = await fetch(`${workerUrl}/health`, { signal: AbortSignal.timeout(5000) });
+      const json = await res.json();
+      if (res.ok && json.status === "ok") {
+        pass("worker-service", `worker service healthy at ${workerUrl} (${elapsed()})`);
+      } else {
+        fault("worker-service", `worker service /health returned unexpected response: ${JSON.stringify(json)}`);
+      }
+    } catch (e) {
+      fault("worker-service", `worker service unreachable at ${workerUrl}: ${e.message}`);
+    }
+  }
+
+  // ─── 6. Secret Manager reachability ────────────────────────────────────────
+
+  header("6 / 7  Secret Manager");
 
   const igaClientSecret = env("IGA_CLIENT_SECRET");
   if (!igaClientSecret) {
@@ -275,14 +298,14 @@ if (!IS_LOCAL) {
   }
 } // end production-only checks
 
-// ─── 6. OAuth AS JWKS endpoint ────────────────────────────────────────────────
+// ─── 7. OAuth AS JWKS endpoint ────────────────────────────────────────────────
 // Supports PingOne and PingOne Advanced Identity Cloud (AIC / ForgeRock).
 // If PUBLIC_API_JWKS_URL is set, it is used directly.
 // Otherwise we try OIDC discovery (issuer/.well-known/openid-configuration) to
 // find jwks_uri — required for AIC realm URLs that don't follow the
 // /.well-known/jwks.json convention.
 
-header(`${IS_LOCAL ? 2 : 6} / ${IS_LOCAL ? 2 : 6}  OAuth AS JWKS`);
+header(`${IS_LOCAL ? 2 : 7} / ${IS_LOCAL ? 2 : 7}  OAuth AS JWKS`);
 
 const issuer = env("PUBLIC_API_ISSUER");
 let jwksUrl = env("PUBLIC_API_JWKS_URL") || null;

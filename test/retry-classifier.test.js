@@ -72,4 +72,20 @@ describe("classifyWorkerError", () => {
       reason: "explicit_error_retryable_flag"
     });
   });
+
+  it("classifies RUNTIME_ARTIFACT_SHA256_MISMATCH as non-retryable", () => {
+    expect(classifyWorkerError(errorWithCode("RUNTIME_ARTIFACT_SHA256_MISMATCH"))).toEqual({
+      retryable: false,
+      classification: "NON_RETRYABLE",
+      reason: "non_retryable_code:RUNTIME_ARTIFACT_SHA256_MISMATCH"
+    });
+  });
+
+  it("classifies RUNTIME_ARTIFACT_DOWNLOAD_FAILED as retryable", () => {
+    expect(classifyWorkerError(errorWithCode("RUNTIME_ARTIFACT_DOWNLOAD_FAILED"))).toEqual({
+      retryable: true,
+      classification: "RETRYABLE",
+      reason: "retryable_code:RUNTIME_ARTIFACT_DOWNLOAD_FAILED"
+    });
+  });
 });

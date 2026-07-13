@@ -14,10 +14,18 @@ WORKDIR /app
 COPY package.json package-lock.json* ./
 RUN npm ci --omit=dev
 
-# Install the Python SDK so Python jobs can import iga_scheduler without
-# relying on PYTHONPATH (PYTHONPATH is set as a fallback for local dev).
+# Install the Python SDK and ML libraries used by Python jobs.
+# numpy/scipy/pandas/scikit-learn cover array math, statistics, and ML algorithms.
+# python-dateutil handles ISO 8601 timestamps from AIC API responses.
+# PYTHONPATH is also set at runtime as a fallback for local dev.
 COPY sdk/python /build/sdk
-RUN pip install --no-cache-dir /build/sdk
+RUN pip install --no-cache-dir \
+    numpy \
+    scipy \
+    pandas \
+    scikit-learn \
+    python-dateutil \
+    /build/sdk
 
 # Copy the scheduler service source that the worker depends on.
 # The worker entry point is src/workers/app.js; it imports from src/services/

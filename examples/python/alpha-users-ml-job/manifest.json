@@ -1,0 +1,5 @@
+{
+  "entrypoint": "job.py",
+  "runtime": "python",
+  "wrapperVersion": "1"
+}

@@ -99,6 +99,7 @@ export function createJobInstanceRouter({ service = new JobInstanceService(), ru
         attempt: 1,
         params: instance.parameters ?? {},
         createdAt: nowIso,
+        updatedAt: nowIso,
         startedAt: null,
         endedAt: null,
         heartbeatAt: null,

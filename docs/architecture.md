@@ -1,5 +1,50 @@
 # Architecture
 
+## High-level overview
+
+```mermaid
+flowchart LR
+    subgraph Users["Users & systems"]
+        OPS["Operator\n(API client)"]
+        IGA["IGA platform\n(ForgeRock AIC)"]
+    end
+
+    subgraph GCP["Google Cloud Platform"]
+        subgraph SchedulerSvc["Cloud Run — Scheduler"]
+            API["REST API\n/job-definitions\n/job-instances\n/job-runs"]
+            TICK["Tick + Dispatcher\ncron every minute\npoll every 5 s"]
+        end
+
+        subgraph WorkerSvc["Cloud Run — Worker"]
+            EXEC["Job Executor\nNode 22 / Python 3.11\nsubprocess isolation"]
+        end
+
+        subgraph Data["Data stores"]
+            PG[("PostgreSQL\nschedule + run queue")]
+            ES[("Elasticsearch\ndefinitions + audit")]
+            GCS[("Cloud Storage\njob ZIP artifacts")]
+            SM["Secret Manager"]
+        end
+
+        CS["Cloud Scheduler\ncron trigger"]
+    end
+
+    OPS -->|"upload ZIP\nmanage schedules\nview runs"| API
+    IGA -->|"JWKS (JWT verify)"| API
+    CS -->|"OIDC every minute"| TICK
+    API --- PG
+    API --- ES
+    API --- GCS
+    TICK -->|"enqueue runs"| PG
+    TICK -->|"dispatch"| EXEC
+    EXEC -->|"claim + complete runs"| PG
+    EXEC -->|"download ZIP"| GCS
+    EXEC -->|"audit"| ES
+    EXEC -->|"IGA proxy calls"| IGA
+    EXEC --- SM
+    API --- SM
+```
+
 ## System overview
 
 ```mermaid

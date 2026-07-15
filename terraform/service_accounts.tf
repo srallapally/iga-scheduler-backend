@@ -164,6 +164,6 @@ resource "google_service_account_iam_member" "deployer_actas_scheduler_service" 
 
 resource "google_storage_bucket_iam_member" "deployer_state_read" {
   bucket = var.tf_state_bucket_name
-  role   = "roles/storage.objectViewer"
+  role   = "roles/storage.objectAdmin"
   member = "serviceAccount:${google_service_account.deployer.email}"
 }

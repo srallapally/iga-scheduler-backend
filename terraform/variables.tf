@@ -30,11 +30,12 @@ variable "cloud_run_service_name" {
 }
 
 variable "cloud_run_service_url" {
-  description = "Base URL of the existing Cloud Run service, without a trailing slash. Used as the OIDC audience."
+  description = "Base URL of the existing Cloud Run service, without a trailing slash. Used as the OIDC audience. Set to \"\" on first apply before the service exists."
   type        = string
+  default     = ""
 
   validation {
-    condition     = can(regex("^https://[^/]+/?$", var.cloud_run_service_url))
+    condition     = var.cloud_run_service_url == "" || can(regex("^https://[^/]+/?$", var.cloud_run_service_url))
     error_message = "cloud_run_service_url must be a base HTTPS URL without a path, for example https://iga-scheduler-abc-uc.a.run.app."
   }
 }
@@ -267,10 +268,6 @@ variable "es_endpoint" {
 }
 
 variable "iga_token_endpoint" {
-  type = string
-}
-
-variable "iga_client_id" {
   type = string
 }
 

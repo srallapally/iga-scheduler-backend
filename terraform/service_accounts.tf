@@ -88,6 +88,19 @@ resource "google_cloud_run_service_iam_member" "runtime_invoker" {
 
 # ── deployer: push images, deploy Cloud Run resources, act-as runtime SA ──────
 
+resource "google_project_iam_member" "deployer_cloudsql" {
+  project = var.project_id
+  role    = "roles/cloudsql.client"
+  member  = "serviceAccount:${google_service_account.deployer.email}"
+}
+
+resource "google_secret_manager_secret_iam_member" "deployer_db_password" {
+  secret_id = google_secret_manager_secret.db_password.secret_id
+  project   = var.project_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.deployer.email}"
+}
+
 resource "google_artifact_registry_repository_iam_member" "deployer_push" {
   project    = var.project_id
   location   = var.region

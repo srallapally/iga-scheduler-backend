@@ -332,6 +332,91 @@ python3 -m pytest sdk/python/     # Python SDK tests
 
 No build step — the app runs as ESM directly under Node 22.
 
+### End-to-end local testing for Python jobs
+
+In `APP_MODE=local` the scheduler spawns job subprocesses directly via `JobRuntimeExecutor` — no separate worker service is involved. This means you can test a Python job end-to-end with just the scheduler running locally.
+
+**Prerequisites**
+
+```bash
+# Install the Python SDK and any libraries your job uses
+pip install sdk/python/ numpy scipy pandas scikit-learn python-dateutil
+
+# Ensure python3.11 is on PATH, or set PYTHON311_BIN to the full path
+python3.11 --version
+```
+
+**`.env.local` additions for Python jobs**
+
+```bash
+# DirectIgaClient reads these from the child process environment
+IGA_BASE_URL=https://<tenant>.forgeblocks.com/am
+IGA_TOKEN_ENDPOINT=https://<tenant>.forgeblocks.com/am/oauth2/alpha/access_token
+IGA_CLIENT_ID=<your-client-id>
+IGA_CLIENT_SECRET=<your-client-secret>
+```
+
+**Run the scheduler, then register and execute the job**
+
+```bash
+# Terminal 1
+npm run start:local
+
+# Terminal 2 — zip, register, and run (example: alpha-users-ml-job)
+cd examples/python/alpha-users-ml-job
+zip -j alpha-users-ml.zip manifest.json job.py
+cd ../../..
+
+# Create the job definition
+curl -s -X POST http://localhost:3000/api/v1/definitions \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "definitionId": "alpha-users-ml",
+    "name": "Alpha Users ML Anomaly Detection",
+    "runtime": "python",
+    "runtimeVersion": "python311",
+    "entrypoint": "job.py",
+    "parameters": {
+      "pageSize":      { "type": "number" },
+      "contamination": { "type": "number" },
+      "fields":        { "type": "string" }
+    }
+  }'
+
+# Upload the artifact ZIP
+curl -s -X PUT http://localhost:3000/api/v1/definitions/alpha-users-ml/artifact \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/zip" \
+  --data-binary @examples/python/alpha-users-ml-job/alpha-users-ml.zip
+
+# Trigger run-now (requires an instance to exist, or use the run-now endpoint)
+curl -s -X POST http://localhost:3000/api/v1/instances \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "instanceId": "alpha-users-ml-nightly",
+    "definitionId": "alpha-users-ml",
+    "cronExpression": "0 2 * * *",
+    "params": { "pageSize": 50, "contamination": 0.05 }
+  }'
+
+curl -s -X POST http://localhost:3000/api/v1/instances/alpha-users-ml-nightly/run-now \
+  -H "Authorization: Bearer <token>"
+```
+
+Poll the run status to see results:
+
+```bash
+curl -s http://localhost:3000/api/v1/runs/<runId> \
+  -H "Authorization: Bearer <token>" | jq .result
+```
+
+**Faster iteration options**
+
+- **Unit-test ML logic without AIC**: call `build_feature_matrix` and `run_anomaly_detection` directly with synthetic data — no scheduler or network needed.
+- **Test AIC connectivity directly**: set `IGA_SCHEDULER_CONTEXT_FILE`, `IGA_SCHEDULER_RUN_ID`, and the IGA env vars, then run `python3.11 examples/python/alpha-users-ml-job/job.py` directly. `PYTHONPATH` must include `sdk/python/`.
+
 ## Further reading
 
 - `docs/runbook.md` — full operator runbook (local dev, production deploy, troubleshooting)

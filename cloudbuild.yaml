@@ -60,6 +60,42 @@ steps:
     args: ["push", "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/iga-scheduler-worker:$SHORT_SHA"]
   # No separate push for scheduler image — pack's --publish already pushed it.
 
+  # ── Run Postgres migrations ──────────────────────────────────────────────────
+  # Must run before the new image is live so schema is ready when traffic shifts.
+  # Uses the Cloud SQL Auth Proxy sidecar pattern: the proxy is started in the
+  # background, migrations run via DATABASE_URL pointing to localhost, then the
+  # proxy is shut down cleanly.
+  # Requires: deployer SA has roles/cloudsql.client on the project (set in
+  # service_accounts.tf), and DB_PASSWORD secret is accessible.
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -euo pipefail
+        OUT=/workspace/tf-outputs.json
+        DB_CONN=$(jq -r '.db_instance_connection_name.value' "$OUT")
+        DB_PASS=$(gcloud secrets versions access latest --secret=iga-scheduler-db-password)
+
+        # Start Cloud SQL Auth Proxy in background
+        curl -fsSL -o /workspace/cloud-sql-proxy \
+          https://storage.googleapis.com/cloud-sql-connectors/cloud-sql-proxy/v2.14.2/cloud-sql-proxy.linux.amd64
+        chmod +x /workspace/cloud-sql-proxy
+        /workspace/cloud-sql-proxy --port=5432 "$DB_CONN" &
+        PROXY_PID=$!
+
+        # Wait for proxy to be ready
+        for i in $(seq 1 15); do
+          nc -z 127.0.0.1 5432 2>/dev/null && break
+          sleep 1
+        done
+
+        DATABASE_URL="postgresql://iga_scheduler_app:${DB_PASS}@127.0.0.1:5432/iga_scheduler?sslmode=disable" \
+        DB_ENGINE=direct DB_ALLOW_DIRECT=1 \
+        npm run migrate:up
+
+        kill "$PROXY_PID" || true
+
   # ── Deploy worker service ────────────────────────────────────────────────────
   - name: gcr.io/google.com/cloudsdktool/cloud-sdk
     entrypoint: bash

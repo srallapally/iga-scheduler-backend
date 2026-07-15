@@ -1,9 +1,32 @@
+# ── Required: GCP ────────────────────────────────────────────────────────────
 project_id             = "example-project-id"
 region                 = "us-central1"
 cloud_run_service_name = "iga-scheduler"
-cloud_run_service_url  = "https://iga-scheduler-example-uc.a.run.app"
+tf_state_bucket_name   = "example-tf-state-bucket"
 
-# Default production tick. Keep this as {} for real dispatch.
+# Set to "" on first apply; fill in the real URL after the first Cloud Build run.
+cloud_run_service_url  = ""
+
+# GitHub App installation ID from github.com/apps/google-cloud-build — one-time manual step.
+github_app_installation_id = "12345678"
+
+# ── Required: external services ──────────────────────────────────────────────
+es_endpoint         = "https://my-cluster.es.io:9243"
+iga_token_endpoint  = "https://iga.example.com/oauth/token"
+iga_client_id       = "iga-client-id"
+iga_base_url        = "https://iga.example.com"
+public_api_issuer   = "https://auth.pingone.com/<env-id>/as"
+public_api_audience = "https://iga-scheduler.example.com"
+
+# ── Optional overrides (defaults shown, omit to accept defaults) ──────────────
+# scheduler_service_name = "iga-scheduler"
+# worker_service_name    = "iga-scheduler-worker"
+# db_instance_name       = "iga-scheduler-db"
+# db_tier                = "db-custom-2-8192"
+# job_zip_bucket_name    = "iga-scheduler-job-zips"
+# artifact_registry_repo_id = "iga-scheduler"
+
+# ── Cloud Scheduler tick ──────────────────────────────────────────────────────
 scheduler_tick_body = {}
 
 # Optional dry-run validation body:

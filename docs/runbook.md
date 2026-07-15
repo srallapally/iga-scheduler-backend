@@ -1,4 +1,4 @@
-# IGA Scheduler — Operator Runbook
+ and# IGA Scheduler — Operator Runbook
 
 This service runs in two modes controlled by `APP_MODE`:
 
@@ -250,19 +250,35 @@ cp .env.example .env.production
 
 Deploy to Cloud Run with these as environment variables (use Cloud Run's `--set-env-vars` or Secret Manager mounts — never commit secrets).
 
-### 7. Provision Cloud Scheduler (tick)
+### 7. Provision GCP infrastructure (Terraform)
+
+The `terraform/` directory provisions the **complete** GCP stack: VPC, Cloud SQL, GCS, Artifact Registry, Secret Manager, Cloud Run worker service, Cloud Scheduler tick job, all service accounts + IAM bindings, and the Cloud Build CI/CD trigger.
+
+See `terraform/README.md` for the full variable reference. The minimum required variables with no defaults are:
+
+```
+project_id, cloud_run_service_name, cloud_run_service_url,
+tf_state_bucket_name, github_app_installation_id,
+es_endpoint, iga_token_endpoint, iga_client_id, iga_base_url,
+public_api_issuer, public_api_audience
+```
+
+Copy and fill the example vars file, then apply:
 
 ```bash
 cd terraform
-terraform init
-terraform apply \
-  -var="project_id=$PROJECT" \
-  -var="region=$REGION" \
-  -var="cloud_run_service_name=iga-scheduler" \
-  -var="cloud_run_service_url=https://<cloud-run-host>"
+cp terraform.tfvars.example terraform.tfvars
+# edit terraform.tfvars
+
+terraform init \
+  -backend-config="bucket=<tf-state-bucket>" \
+  -backend-config="prefix=iga-scheduler"
+
+terraform plan -var-file=terraform.tfvars
+terraform apply -var-file=terraform.tfvars
 ```
 
-This creates a Cloud Scheduler job that POSTs to `/internal/scheduler/tick` every minute with an OIDC token for the tick invoker service account.
+> **First deploy?** `cloud_run_service_url` and `scheduler_service_url` should be left empty (`""`) on the first apply — the Cloud Run services don't exist yet. After the first `cloudbuild.yaml` run creates them, retrieve the assigned URLs and re-apply with the real values. See `README.md` → "First deploy" for the full bootstrap loop.
 
 ### 8. Verify
 

@@ -148,14 +148,44 @@ npm run preflight
 node scripts/prod/bootstrap-prod.js --skip-preflight --es-only
 
 echo ""
+echo "=== Step 6: Cloud Build — build and deploy services ==="
+cd "$REPO_ROOT"
+
+# Use real service URLs if known; fall back to placeholder so the service starts.
+# On first deploy these will be "https://placeholder" which satisfies productionValidation.js
+# (non-empty). After first deploy, update set-env.sh with the real Cloud Run URLs and re-run.
+SCHEDULER_URL="${RUNTIME_BROKER_URL:-https://placeholder}"
+WORKER_URL="${RUNTIME_WORKER_URL:-https://placeholder}"
+
+gcloud builds submit \
+  --config=cloudbuild.yaml \
+  --project="${PROJECT}" \
+  --substitutions="SHORT_SHA=$(git rev-parse --short HEAD),\
+_TF_STATE_BUCKET=${TF_STATE_BUCKET},\
+_ES_ENDPOINT=${ES_ENDPOINT},\
+_IGA_TOKEN_ENDPOINT=${IGA_TOKEN_ENDPOINT},\
+_IGA_BASE_URL=${IGA_BASE_URL},\
+_PUBLIC_API_ISSUER=${PUBLIC_API_ISSUER},\
+_PUBLIC_API_AUDIENCE=${PUBLIC_API_AUDIENCE},\
+_SERVICE_URL=${SCHEDULER_URL},\
+_RUNTIME_WORKER_URL=${WORKER_URL}"
+
+echo ""
 echo "=== Deploy complete ==="
 echo ""
-echo "First deploy? The Cloud Run services don't have real URLs yet."
-echo "Run the initial build to create them:"
-echo "  gcloud builds submit --config=cloudbuild.yaml . --project=${PROJECT} \\"
-echo "    --substitutions=SHORT_SHA=\$(git rev-parse --short HEAD),_TF_STATE_BUCKET=${TF_STATE_BUCKET}"
-echo ""
-echo "Then retrieve the URLs and re-run this script:"
-echo "  SCHEDULER_URL=\$(gcloud run services describe iga-scheduler --region=${REGION} --project=${PROJECT} --format='value(status.url)')"
-echo "  WORKER_URL=\$(gcloud run services describe iga-scheduler-worker --region=${REGION} --project=${PROJECT} --format='value(status.url)')"
-echo "  Update terraform/terraform.tfvars: cloud_run_service_url and scripts/prod/set-env.sh: RUNTIME_BROKER_URL, RUNTIME_WORKER_URL"
+ACTUAL_SCHEDULER_URL=$(gcloud run services describe iga-scheduler --region="${REGION}" --project="${PROJECT}" --format='value(status.url)' 2>/dev/null || echo "")
+ACTUAL_WORKER_URL=$(gcloud run services describe iga-scheduler-worker --region="${REGION}" --project="${PROJECT}" --format='value(status.url)' 2>/dev/null || echo "")
+echo "Scheduler URL: ${ACTUAL_SCHEDULER_URL}"
+echo "Worker URL:    ${ACTUAL_WORKER_URL}"
+if [[ "${SCHEDULER_URL}" == "https://placeholder" && -n "${ACTUAL_SCHEDULER_URL}" ]]; then
+  echo ""
+  echo "First deploy complete. Update scripts/prod/set-env.sh:"
+  echo "  RUNTIME_BROKER_URL=\"${ACTUAL_SCHEDULER_URL}\""
+  echo "  RUNTIME_WORKER_URL=\"${ACTUAL_WORKER_URL}\""
+  echo "  WORKER_OIDC_AUDIENCE=\"${ACTUAL_SCHEDULER_URL}\""
+  echo "  SCHEDULER_OIDC_AUDIENCE=\"${ACTUAL_SCHEDULER_URL}\""
+  echo "Then update terraform/terraform.tfvars:"
+  echo "  cloud_run_service_url = \"${ACTUAL_SCHEDULER_URL}\""
+  echo "  worker_service_url    = \"${ACTUAL_WORKER_URL}\""
+  echo "Then re-run: bash scripts/prod/deploy.sh"
+fi

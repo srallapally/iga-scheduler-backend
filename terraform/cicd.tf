@@ -16,7 +16,10 @@ resource "google_cloudbuildv2_connection" "github" {
     }
   }
 
-  depends_on = [google_project_service.cloudbuild]
+  depends_on = [
+    google_project_service.cloudbuild,
+    google_secret_manager_secret_iam_member.cloudbuild_agent_github_token,
+  ]
 }
 
 resource "google_cloudbuildv2_repository" "scheduler" {
@@ -46,11 +49,9 @@ resource "google_cloudbuild_trigger" "on_push_main" {
     _REGION                 = var.region
     _REPO                   = var.artifact_registry_repo_id
     _SCHEDULER_SERVICE_NAME = var.scheduler_service_name
-    _WORKER_SERVICE_NAME    = var.worker_service_name
     _TF_STATE_BUCKET        = var.tf_state_bucket_name
     _ES_ENDPOINT            = var.es_endpoint
     _IGA_TOKEN_ENDPOINT     = var.iga_token_endpoint
-    _IGA_CLIENT_ID          = var.iga_client_id
     _IGA_BASE_URL           = var.iga_base_url
     _PUBLIC_API_ISSUER      = var.public_api_issuer
     _PUBLIC_API_AUDIENCE    = var.public_api_audience

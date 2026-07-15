@@ -34,6 +34,13 @@ resource "google_secret_manager_secret_iam_member" "scheduler_service_db_passwor
   member    = "serviceAccount:${google_service_account.scheduler_service.email}"
 }
 
+resource "google_secret_manager_secret_iam_member" "scheduler_service_iga_client_id" {
+  secret_id = google_secret_manager_secret.iga_client_id.secret_id
+  project   = var.project_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.scheduler_service.email}"
+}
+
 resource "google_secret_manager_secret_iam_member" "scheduler_service_iga_secret" {
   secret_id = google_secret_manager_secret.iga_client_secret.secret_id
   project   = var.project_id
@@ -69,6 +76,13 @@ resource "google_cloud_run_v2_service_iam_member" "scheduler_service_invoke_work
 
 # The worker service (runtime SA) mounts IGA_CLIENT_SECRET via --set-secrets.
 # Cloud Run resolves secret bindings using the service's SA at revision creation.
+resource "google_secret_manager_secret_iam_member" "runtime_iga_client_id" {
+  secret_id = google_secret_manager_secret.iga_client_id.secret_id
+  project   = var.project_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.runtime.email}"
+}
+
 resource "google_secret_manager_secret_iam_member" "runtime_iga_secret" {
   secret_id = google_secret_manager_secret.iga_client_secret.secret_id
   project   = var.project_id

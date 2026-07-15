@@ -2,7 +2,6 @@ substitutions:
   _REGION: us-central1
   _REPO: iga-scheduler
   _SCHEDULER_SERVICE_NAME: iga-scheduler
-  _WORKER_SERVICE_NAME: iga-scheduler-worker
   _TF_STATE_BUCKET: ""   # GCS bucket for terraform/versions.tf backend — set per trigger;
                           # can't come from terraform output (it's needed to read state)
   _ES_ENDPOINT: ""        # ES cluster URL — external, not Terraform-managed
@@ -46,19 +45,20 @@ steps:
       - ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/iga-scheduler-worker:$SHORT_SHA
       - .
 
-  # ── Scheduler service image (Buildpacks, no Dockerfile) ─────────────────────
-  - name: gcr.io/k8s-skaffold/pack
-    entrypoint: pack
+  # ── Scheduler service image ─────────────────────────────────────────────────
+  - name: gcr.io/cloud-builders/docker
     args:
       - build
+      - -f
+      - Dockerfile
+      - -t
       - ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/iga-scheduler-service:$SHORT_SHA
-      - --builder=gcr.io/buildpacks/builder:google-22
-      - --path=.
-      - --publish
+      - .
 
   - name: gcr.io/cloud-builders/docker
     args: ["push", "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/iga-scheduler-worker:$SHORT_SHA"]
-  # No separate push for scheduler image — pack's --publish already pushed it.
+  - name: gcr.io/cloud-builders/docker
+    args: ["push", "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/iga-scheduler-service:$SHORT_SHA"]
 
   # ── Run Postgres migrations ──────────────────────────────────────────────────
   # Must run before the new image is live so schema is ready when traffic shifts.
@@ -74,27 +74,27 @@ steps:
       - |
         set -euo pipefail
         OUT=/workspace/tf-outputs.json
-        DB_CONN=$(jq -r '.db_instance_connection_name.value' "$OUT")
-        DB_PASS=$(gcloud secrets versions access latest --secret=iga-scheduler-db-password)
+        DB_CONN=$$(jq -r '.db_instance_connection_name.value' "$$OUT")
+        DB_PASS=$$(gcloud secrets versions access latest --secret=iga-scheduler-db-password)
 
         # Start Cloud SQL Auth Proxy in background
         curl -fsSL -o /workspace/cloud-sql-proxy \
           https://storage.googleapis.com/cloud-sql-connectors/cloud-sql-proxy/v2.14.2/cloud-sql-proxy.linux.amd64
         chmod +x /workspace/cloud-sql-proxy
-        /workspace/cloud-sql-proxy --port=5432 "$DB_CONN" &
-        PROXY_PID=$!
+        /workspace/cloud-sql-proxy --port=5432 "$$DB_CONN" &
+        PROXY_PID=$$!
 
         # Wait for proxy to be ready
-        for i in $(seq 1 15); do
+        for i in $$(seq 1 15); do
           nc -z 127.0.0.1 5432 2>/dev/null && break
           sleep 1
         done
 
-        DATABASE_URL="postgresql://iga_scheduler_app:${DB_PASS}@127.0.0.1:5432/iga_scheduler?sslmode=disable" \
+        DATABASE_URL="postgresql://iga_scheduler_app:$${DB_PASS}@127.0.0.1:5432/iga_scheduler?sslmode=disable" \
         DB_ENGINE=direct DB_ALLOW_DIRECT=1 \
         npm run migrate:up
 
-        kill "$PROXY_PID" || true
+        kill "$$PROXY_PID" || true
 
   # ── Deploy worker service ────────────────────────────────────────────────────
   - name: gcr.io/google.com/cloudsdktool/cloud-sdk
@@ -104,17 +104,17 @@ steps:
       - |
         set -euo pipefail
         OUT=/workspace/tf-outputs.json
-        RUNTIME_SA=$(jq -r '.runtime_service_account_email.value' "$OUT")
-        WORKER_NAME=$(jq -r '.worker_service_name.value' "$OUT")
-        JOB_ZIP_BUCKET=$(jq -r '.job_zip_bucket_name.value' "$OUT")
+        RUNTIME_SA=$$(jq -r '.runtime_service_account_email.value' "$$OUT")
+        WORKER_NAME=$$(jq -r '.worker_service_name.value' "$$OUT")
+        JOB_ZIP_BUCKET=$$(jq -r '.job_zip_bucket_name.value' "$$OUT")
 
-        gcloud run deploy "$WORKER_NAME" \
+        gcloud run deploy "$$WORKER_NAME" \
           --image=${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/iga-scheduler-worker:$SHORT_SHA \
           --region=${_REGION} \
-          --service-account="$RUNTIME_SA" \
+          --service-account="$$RUNTIME_SA" \
           --min-instances=1 \
           --no-cpu-throttling \
-          --set-env-vars="NODE_ENV=production,GCP_PROJECT_ID=${PROJECT_ID},GCP_REGION=${_REGION},WORKER_EXECUTION_MODE=local,JOB_ZIP_BUCKET=$JOB_ZIP_BUCKET,RUNTIME_BROKER_URL=${_SERVICE_URL},IGA_TOKEN_ENDPOINT=${_IGA_TOKEN_ENDPOINT},IGA_CLIENT_ID=${_IGA_CLIENT_ID},IGA_BASE_URL=${_IGA_BASE_URL},RUNTIME_WORKER_URL=${_RUNTIME_WORKER_URL},RUNTIME_SERVICE_ACCOUNT_EMAIL=$RUNTIME_SA" \
+          --set-env-vars="NODE_ENV=production,GCP_PROJECT_ID=${PROJECT_ID},GCP_REGION=${_REGION},WORKER_EXECUTION_MODE=local,JOB_ZIP_BUCKET=$$JOB_ZIP_BUCKET,RUNTIME_BROKER_URL=${_SERVICE_URL},IGA_TOKEN_ENDPOINT=${_IGA_TOKEN_ENDPOINT},IGA_CLIENT_ID=${_IGA_CLIENT_ID},IGA_BASE_URL=${_IGA_BASE_URL},RUNTIME_WORKER_URL=${_RUNTIME_WORKER_URL},RUNTIME_SERVICE_ACCOUNT_EMAIL=$$RUNTIME_SA" \
           --set-secrets="IGA_CLIENT_SECRET=iga-scheduler-iga-client-secret:latest"
 
   # ── Deploy scheduler service ─────────────────────────────────────────────────
@@ -125,22 +125,21 @@ steps:
       - |
         set -euo pipefail
         OUT=/workspace/tf-outputs.json
-        SCHEDULER_SA=$(jq -r '.scheduler_service_account_email.value' "$OUT")
-        RUNTIME_SA=$(jq -r '.runtime_service_account_email.value' "$OUT")
-        WORKER_INVOKER_SA=$(jq -r '.worker_task_invoker_email.value' "$OUT")
-        SCHEDULER_TICK_SA=$(jq -r '.scheduler_tick_invoker_email.value' "$OUT")
-        DB_CONN=$(jq -r '.db_instance_connection_name.value' "$OUT")
-        VPC_CONNECTOR=$(jq -r '.vpc_connector_id.value' "$OUT")
-        JOB_ZIP_BUCKET=$(jq -r '.job_zip_bucket_name.value' "$OUT")
-        WORKER_NAME=$(jq -r '.worker_service_name.value' "$OUT")
+        SCHEDULER_SA=$$(jq -r '.scheduler_service_account_email.value' "$$OUT")
+        RUNTIME_SA=$$(jq -r '.runtime_service_account_email.value' "$$OUT")
+        WORKER_INVOKER_SA=$$(jq -r '.worker_task_invoker_email.value' "$$OUT")
+        SCHEDULER_TICK_SA=$$(jq -r '.scheduler_tick_invoker_email.value' "$$OUT")
+        DB_CONN=$$(jq -r '.db_instance_connection_name.value' "$$OUT")
+        VPC_CONNECTOR=$$(jq -r '.vpc_connector_id.value' "$$OUT")
+        JOB_ZIP_BUCKET=$$(jq -r '.job_zip_bucket_name.value' "$$OUT")
 
         gcloud run deploy ${_SCHEDULER_SERVICE_NAME} \
           --image=${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/iga-scheduler-service:$SHORT_SHA \
           --region=${_REGION} \
-          --vpc-connector="$VPC_CONNECTOR" \
+          --vpc-connector="$$VPC_CONNECTOR" \
           --vpc-egress=private-ranges-only \
-          --service-account="$SCHEDULER_SA" \
-          --set-env-vars="NODE_ENV=production,GCP_PROJECT_ID=${PROJECT_ID},GCP_REGION=${_REGION},JOB_ZIP_BUCKET=$JOB_ZIP_BUCKET,ES_ENDPOINT=${_ES_ENDPOINT},WORKER_OIDC_AUDIENCE=${_SERVICE_URL},WORKER_INVOKER_SERVICE_ACCOUNT_EMAIL=$WORKER_INVOKER_SA,SCHEDULER_OIDC_AUDIENCE=${_SERVICE_URL},SCHEDULER_INVOKER_SERVICE_ACCOUNT_EMAIL=$SCHEDULER_TICK_SA,WORKER_EXECUTION_MODE=isolated,RUNTIME_WORKER_URL=${_RUNTIME_WORKER_URL},RUNTIME_SERVICE_ACCOUNT_EMAIL=$RUNTIME_SA,RUNTIME_BROKER_URL=${_SERVICE_URL},IGA_TOKEN_ENDPOINT=${_IGA_TOKEN_ENDPOINT},IGA_CLIENT_ID=${_IGA_CLIENT_ID},IGA_BASE_URL=${_IGA_BASE_URL},PUBLIC_API_ISSUER=${_PUBLIC_API_ISSUER},PUBLIC_API_AUDIENCE=${_PUBLIC_API_AUDIENCE},DB_ENGINE=cloud-sql,DB_INSTANCE_CONNECTION_NAME=$DB_CONN,DB_USER=iga_scheduler_app,DB_NAME=iga_scheduler" \
+          --service-account="$$SCHEDULER_SA" \
+          --set-env-vars="NODE_ENV=production,GCP_PROJECT_ID=${PROJECT_ID},GCP_REGION=${_REGION},JOB_ZIP_BUCKET=$$JOB_ZIP_BUCKET,ES_ENDPOINT=${_ES_ENDPOINT},WORKER_OIDC_AUDIENCE=${_SERVICE_URL},WORKER_INVOKER_SERVICE_ACCOUNT_EMAIL=$$WORKER_INVOKER_SA,SCHEDULER_OIDC_AUDIENCE=${_SERVICE_URL},SCHEDULER_INVOKER_SERVICE_ACCOUNT_EMAIL=$$SCHEDULER_TICK_SA,WORKER_EXECUTION_MODE=isolated,RUNTIME_WORKER_URL=${_RUNTIME_WORKER_URL},RUNTIME_SERVICE_ACCOUNT_EMAIL=$$RUNTIME_SA,RUNTIME_BROKER_URL=${_SERVICE_URL},IGA_TOKEN_ENDPOINT=${_IGA_TOKEN_ENDPOINT},IGA_CLIENT_ID=${_IGA_CLIENT_ID},IGA_BASE_URL=${_IGA_BASE_URL},PUBLIC_API_ISSUER=${_PUBLIC_API_ISSUER},PUBLIC_API_AUDIENCE=${_PUBLIC_API_AUDIENCE},DB_ENGINE=cloud-sql,DB_INSTANCE_CONNECTION_NAME=$$DB_CONN,DB_USER=iga_scheduler_app,DB_NAME=iga_scheduler" \
           --set-secrets="ES_API_KEY=iga-scheduler-es-api-key:latest,IGA_CLIENT_SECRET=iga-scheduler-iga-client-secret:latest,DB_PASSWORD=iga-scheduler-db-password:latest"
 
 images:

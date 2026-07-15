@@ -2,126 +2,116 @@
 
 ## High-level overview
 
-```mermaid
-flowchart LR
-    subgraph Users["Users & systems"]
-        OPS["Operator\n(API client)"]
-        IGA["IGA platform\n(ForgeRock AIC)"]
-    end
-
-    subgraph GCP["Google Cloud Platform"]
-        subgraph SchedulerSvc["Cloud Run — Scheduler"]
-            API["REST API\n/job-definitions\n/job-instances\n/job-runs"]
-            TICK["Tick + Dispatcher\ncron every minute\npoll every 5 s"]
-        end
-
-        subgraph WorkerSvc["Cloud Run — Worker"]
-            EXEC["Job Executor\nNode 22 / Python 3.11\nsubprocess isolation"]
-        end
-
-        subgraph Data["Data stores"]
-            PG[("PostgreSQL\nschedule + run queue")]
-            ES[("Elasticsearch\ndefinitions + audit")]
-            GCS[("Cloud Storage\njob ZIP artifacts")]
-            SM["Secret Manager"]
-        end
-
-        CS["Cloud Scheduler\ncron trigger"]
-    end
-
-    OPS -->|"upload ZIP\nmanage schedules\nview runs"| API
-    IGA -->|"JWKS (JWT verify)"| API
-    CS -->|"OIDC every minute"| TICK
-    API --- PG
-    API --- ES
-    API --- GCS
-    TICK -->|"enqueue runs"| PG
-    TICK -->|"dispatch"| EXEC
-    EXEC -->|"claim + complete runs"| PG
-    EXEC -->|"download ZIP"| GCS
-    EXEC -->|"audit"| ES
-    EXEC -->|"IGA proxy calls"| IGA
-    EXEC --- SM
-    API --- SM
+```
+  ┌─────────────────────────────────────────────────────────────────────────────────┐
+  │  Google Cloud Platform                                                          │
+  │                                                                                 │
+  │   ┌──────────────────────────────────────┐   ┌────────────────────────────┐    │
+  │   │  Cloud Run — iga-scheduler           │   │  Cloud Run — iga-scheduler │    │
+  │   │                                      │   │            -worker         │    │
+  │   │  ┌─────────────────────────────┐     │   │                            │    │
+  │   │  │  Public REST API            │◄────┼───┼── Operator (Bearer JWT)    │    │
+  │   │  │  /job-definitions           │     │   │                            │    │
+  │   │  │  /job-instances             │     │   │  ┌──────────────────────┐  │    │
+  │   │  │  /job-runs                  │     │   │  │  Job Executor        │  │    │
+  │   │  └─────────────────────────────┘     │   │  │  Node 22 / Py 3.11   │  │    │
+  │   │                                      │   │  │  subprocess isolated │  │    │
+  │   │  ┌─────────────────────────────┐     │   │  └──────────┬───────────┘  │    │
+  │   │  │  Tick + Dispatcher          │─────┼───┼─POST /exec  │              │    │
+  │   │  │  cron tick every minute     │     │   │             │ spawn        │    │
+  │   │  │  dispatch poll every 5s     │     │   │         job subprocess     │    │
+  │   │  └─────────────────────────────┘     │   │             │              │    │
+  │   │          ▲                           │   └─────────────┼──────────────┘    │
+  │   │          │ OIDC every minute         │                 │                   │
+  │   │   Cloud Scheduler (cron)             │                 │ OIDC              │
+  │   │                                      │◄────────────────┘ /complete         │
+  │   └──────────┬───────────────────────────┘  /internal/runtime/iga/request      │
+  │              │                                                                  │
+  │              │  read/write                                                      │
+  │    ┌─────────▼──────────────────────────────────────────────────────────┐      │
+  │    │  Data stores                                                        │      │
+  │    │                                                                     │      │
+  │    │  ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐  │      │
+  │    │  │  Cloud SQL PG 15 │  │  Elasticsearch   │  │  Cloud Storage   │  │      │
+  │    │  │  job_instances   │  │  definitions     │  │  job ZIP         │  │      │
+  │    │  │  job_runs        │  │  audit events    │  │  artifacts       │  │      │
+  │    │  └──────────────────┘  └──────────────────┘  └──────────────────┘  │      │
+  │    │                                                                     │      │
+  │    │  ┌──────────────────┐                                               │      │
+  │    │  │  Secret Manager  │  IGA_CLIENT_ID · IGA_CLIENT_SECRET            │      │
+  │    │  │                  │  DB_PASSWORD · ES_API_KEY                     │      │
+  │    │  └──────────────────┘                                               │      │
+  │    └─────────────────────────────────────────────────────────────────────┘      │
+  └─────────────────────────────────────────────────────────────────────────────────┘
+                                            │
+                              ┌─────────────▼─────────────┐
+                              │  IGA platform (ForgeRock) │
+                              │  Token endpoint · JWKS    │
+                              │  IGA REST API             │
+                              └───────────────────────────┘
 ```
 
 ## System overview
 
-```mermaid
-flowchart TD
-    subgraph Clients["External clients"]
-        APICLIENT["API client\n(curl / SDK)"]
-        IGAPLATFORM["IGA platform\n(ForgeRock AIC)"]
-    end
-
-    subgraph Scheduler["Cloud Run — iga-scheduler"]
-        direction TB
-        PUBLICAPI["Public API\nGET/POST /job-definitions\nGET/POST /job-instances\nGET /job-runs"]
-        PUBLICAUTH["publicAuth middleware\nJWT verify (JWKS)"]
-        TICKROUTE["Internal tick route\nPOST /internal/scheduler/tick\n(Cloud Scheduler OIDC)"]
-        TICKSVC["SchedulerTickService\nClaim due instances\nCreate QUEUED run rows\nAdvance nextFireAt"]
-        DISPATCHPOLLER["RunDispatcher\npoll every 5 s\nlistQueuedRunIds"]
-        WORKERSVC["WorkerRunService\nclaimRun (optimistic lock)\nvalidateArtifactTrust\nresolveParameters\nlaunchExecution"]
-        COMPLETEROUTE["Internal complete route\nPOST /internal/job-runs/:runId/complete\n(runtime OIDC)"]
-        IGAPROXY["IGA proxy\nPOST /internal/runtime/iga/request\n(runtime OIDC)"]
-    end
-
-    subgraph Worker["Cloud Run — iga-scheduler-worker"]
-        direction TB
-        EXECUTEROUTE["POST /execute\n(scheduler OIDC)"]
-        WORKERRUNSVC2["WorkerRunService\nclaimRun\nbuildExecutionMetadata\nverifyApprovedArtifact"]
-        EXECUTOR["JobRuntimeExecutor\nsafeZipExtract\nspawn node / python3\ncapture stdout/stderr"]
-        JOBPROCESS["Job subprocess\n(user code)\nNode 22 or Python 3.11"]
-    end
-
-    subgraph Storage["GCP storage"]
-        PG[("Cloud SQL PG 15\njob_instances\njob_runs")]
-        ES[("Elasticsearch\njob definitions\naudit events")]
-        GCS[("Cloud Storage\napproved job ZIPs")]
-        SM["Secret Manager\nIGA_CLIENT_ID\nIGA_CLIENT_SECRET\nDB_PASSWORD\nES_API_KEY"]
-    end
-
-    subgraph GCPInfra["GCP infrastructure"]
-        CLOUDSCHEDULER["Cloud Scheduler\ncron every minute"]
-    end
-
-    APICLIENT -->|"Bearer JWT"| PUBLICAUTH
-    PUBLICAUTH -->|"valid"| PUBLICAPI
-    PUBLICAPI -->|"store definition + ZIP"| ES
-    PUBLICAPI -->|"store definition ZIP"| GCS
-    PUBLICAPI -->|"read/write instances + runs"| PG
-
-    IGAPLATFORM -->|"JWKS"| PUBLICAUTH
-
-    CLOUDSCHEDULER -->|"OIDC every minute"| TICKROUTE
-    TICKROUTE --> TICKSVC
-    TICKSVC -->|"SELECT FOR UPDATE\ndue instances"| PG
-    TICKSVC -->|"INSERT QUEUED run\nadvance nextFireAt"| PG
-
-    DISPATCHPOLLER -->|"SELECT QUEUED runs"| PG
-    DISPATCHPOLLER --> WORKERSVC
-
-    WORKERSVC -->|"UPDATE → RUNNING\noptimistic lock"| PG
-    WORKERSVC -->|"GET definition"| ES
-    WORKERSVC -->|"POST /execute\nOIDC token"| EXECUTEROUTE
-
-    EXECUTEROUTE --> WORKERRUNSVC2
-    WORKERRUNSVC2 -->|"UPDATE → RUNNING"| PG
-    WORKERRUNSVC2 -->|"GET definition"| ES
-    WORKERRUNSVC2 -->|"download ZIP\nverify SHA-256"| GCS
-    WORKERRUNSVC2 --> EXECUTOR
-    EXECUTOR -->|"spawn"| JOBPROCESS
-
-    JOBPROCESS -->|"IGA API calls\nvia SDK"| IGAPROXY
-    IGAPROXY -->|"verify run is RUNNING"| PG
-    IGAPROXY -->|"proxy request\nwith IGA token"| IGAPLATFORM
-
-    JOBPROCESS -->|"POST /complete\nOIDC token"| COMPLETEROUTE
-    COMPLETEROUTE -->|"UPDATE → SUCCEEDED/FAILED"| PG
-    COMPLETEROUTE -->|"audit event"| ES
-
-    WORKERSVC -->|"read secrets at dispatch"| SM
-    WORKERRUNSVC2 -->|"read secrets at dispatch"| SM
+```
+  Operator ──Bearer JWT──►┌──────────────────────────────────────────────────────┐
+                          │  Cloud Run — iga-scheduler                           │
+  IGA platform ──JWKS───►│                                                      │
+                          │  ┌────────────────────────────────────────────────┐  │
+                          │  │  publicAuth middleware  (JWT verify via JWKS)  │  │
+                          │  └────────────────────────────┬───────────────────┘  │
+                          │                               │ valid                │
+                          │  ┌────────────────────────────▼───────────────────┐  │
+                          │  │  Public REST API                               │  │
+                          │  │  POST /job-definitions    ──────────────────────┼──┼──► GCS (store ZIP)
+                          │  │  GET  /job-definitions    ──────────────────────┼──┼──► ES  (definitions)
+                          │  │  POST /job-instances      ──────────────────────┼──┼──► PG  (instances)
+                          │  │  GET  /job-runs           ──────────────────────┼──┼──► PG  (runs)
+                          │  └────────────────────────────────────────────────┘  │
+                          │                                                      │
+  Cloud Scheduler ──OIDC─►│  POST /internal/scheduler/tick                      │
+  (every minute)          │    └─► SchedulerTickService                         │
+                          │          SELECT FOR UPDATE due instances  ───────────┼──► PG
+                          │          INSERT QUEUED run rows           ───────────┼──► PG
+                          │          advance nextFireAt               ───────────┼──► PG
+                          │                                                      │
+                          │  RunDispatcher  (poll every 5 s)                    │
+                          │    └─► listQueuedRunIds                  ───────────┼──► PG
+                          │    └─► WorkerRunService                             │
+                          │          claimRun (optimistic UPDATE)    ───────────┼──► PG
+                          │          validateArtifactTrust                      │
+                          │          resolveParameters                ───────────┼──► Secret Manager
+                          │          GET definition                  ───────────┼──► ES
+                          │          POST /execute (OIDC)            ───────────┼──────────────────┐
+                          │                                                      │                  │
+                          │  POST /internal/job-runs/:runId/complete ◄──────────┼──────────────────┤
+                          │    └─► markSucceeded / markFailed        ───────────┼──► PG            │
+                          │    └─► audit event                       ───────────┼──► ES            │
+                          │                                                      │                  │
+                          │  POST /internal/runtime/iga/request      ◄──────────┼──────────────────┤
+                          │    └─► verify run is RUNNING             ───────────┼──► PG            │
+                          │    └─► proxy to IGA platform             ───────────┼──► IGA platform  │
+                          └──────────────────────────────────────────────────────┘                  │
+                                                                                                    │
+                          ┌─────────────────────────────────────────────────────┐                  │
+                          │  Cloud Run — iga-scheduler-worker                   │◄─────────────────┘
+                          │                                                     │
+                          │  POST /execute  (scheduler OIDC)                   │
+                          │    └─► WorkerRunService                            │
+                          │          claimRun              ────────────────────┼──► PG
+                          │          GET definition        ────────────────────┼──► ES
+                          │          download ZIP          ────────────────────┼──► GCS
+                          │          verify SHA-256                            │
+                          │          resolveParameters     ────────────────────┼──► Secret Manager
+                          │    └─► JobRuntimeExecutor                          │
+                          │          safeZipExtract                            │
+                          │          spawn node / python3.11                   │
+                          │                │                                   │
+                          │          job subprocess (user code)                │
+                          │                │                                   │
+                          │                ├── POST /complete ──────────────────┼──► scheduler /complete
+                          │                └── POST /iga/request ───────────────┼──► scheduler IGA proxy
+                          └─────────────────────────────────────────────────────┘
 ```
 
 ## Data stores
@@ -135,16 +125,26 @@ flowchart TD
 
 ## Run state machine
 
-```mermaid
-stateDiagram-v2
-    [*] --> QUEUED : tick / run-now
-    QUEUED --> RUNNING : dispatcher claims run\n(optimistic UPDATE)
-    RUNNING --> SUCCEEDED : job calls /complete\nexitCode=0
-    RUNNING --> FAILED : job calls /complete\nexitCode≠0 or timeout
-    RUNNING --> CANCELLING : operator cancel
-    CANCELLING --> CANCELLED : job process exits
-    FAILED --> QUEUED : operator redrive
-    CANCELLED --> QUEUED : operator redrive
+```
+  tick / run-now
+       │
+       ▼
+  ┌─────────┐   dispatcher claims run     ┌─────────┐
+  │ QUEUED  │ ──(optimistic UPDATE)──────► │ RUNNING │
+  └─────────┘                             └────┬────┘
+       ▲                                       │
+       │ redrive                    ┌──────────┼──────────┐
+       │                            │          │          │
+  ┌────┴──────┐             exitCode=0   operator    exitCode≠0
+  │ FAILED /  │                  │       cancel        or timeout
+  │ CANCELLED │             ┌────▼────┐      │       ┌──────────┐
+  └───────────┘             │SUCCEEDED│  ┌───▼─────┐ │  FAILED  │
+                            └─────────┘  │CANCELLING│ └──────────┘
+                                         └────┬─────┘
+                                              │ process exits
+                                         ┌────▼─────┐
+                                         │CANCELLED │
+                                         └──────────┘
 ```
 
 ## Request flows
@@ -164,11 +164,27 @@ stateDiagram-v2
 
 ## CI/CD pipeline
 
-```mermaid
-flowchart LR
-    GH["GitHub push\nto main"] --> CB["Cloud Build"]
-    CB --> TF["Step 0\nterraform output\n→ tf-outputs.json"]
-    CB --> BUILD["Steps 1–4\ndocker build + push\nworker + scheduler images"]
-    CB --> MIGRATE["Steps 5–6\nCloud SQL Auth Proxy\n+ node-pg-migrate"]
-    CB --> DEPLOY["Steps 7–8\ngcloud run deploy\nworker + scheduler"]
+```
+  GitHub push to main
+          │
+          ▼
+  Cloud Build (cloudbuild.yaml)
+  │
+  ├── Step 0 ── terraform output → tf-outputs.json
+  │             (SA emails, DB conn name, VPC connector, bucket name)
+  │
+  ├── Steps 1–2 ── docker build
+  │                ├── runtime-containers/worker/Dockerfile  → worker image
+  │                └── Dockerfile (root)                    → scheduler image
+  │
+  ├── Steps 3–4 ── docker push both images to Artifact Registry
+  │
+  ├── Steps 5–6 ── run Postgres migrations
+  │                ├── fetch DB password from Secret Manager
+  │                ├── start Cloud SQL Auth Proxy (sidecar)
+  │                └── npm run migrate:up  (node-pg-migrate)
+  │
+  └── Steps 7–8 ── gcloud run deploy
+                   ├── iga-scheduler-worker  (worker image + env)
+                   └── iga-scheduler         (scheduler image + env + secrets)
 ```

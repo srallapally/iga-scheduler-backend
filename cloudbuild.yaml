@@ -143,6 +143,12 @@ steps:
         VPC_CONNECTOR=$$(jq -r '.vpc_connector_id.value' "$$OUT")
         JOB_ZIP_BUCKET=$$(jq -r '.job_zip_bucket_name.value' "$$OUT")
 
+        # Clear any old secret-ref bindings on vars we now set as plain strings.
+        # Cloud Run rejects a type change (secret → string) in a single update.
+        gcloud run services update ${_SCHEDULER_SERVICE_NAME} \
+          --region=${_REGION} \
+          --remove-secrets=IGA_CLIENT_ID 2>/dev/null || true
+
         gcloud run deploy ${_SCHEDULER_SERVICE_NAME} \
           --image=${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/iga-scheduler-service:$SHORT_SHA \
           --region=${_REGION} \

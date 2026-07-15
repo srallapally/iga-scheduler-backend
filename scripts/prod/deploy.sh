@@ -65,7 +65,7 @@ seed_secret_if_empty() {
   local value="$2"
   local count
   count=$(gcloud secrets versions list "$secret_id" \
-    --project="$PROJECT" --filter="state=ENABLED" --format="value(name)" 2>/dev/null | wc -l || echo 0)
+    --project="$PROJECT" --filter="state=ENABLED" --format="value(name)" 2>/dev/null | wc -l | tr -d ' ' || echo 0)
   if [[ "$count" -gt 0 ]]; then
     echo "  [secret] $secret_id already has a version — skipping"
   else
@@ -121,20 +121,22 @@ tf_import_if_missing \
   "google_cloud_run_service_iam_member.worker_task_invoker" \
   "v1/projects/${PROJECT}/locations/${REGION}/services/iga-scheduler/roles/run.invoker/serviceAccount:iga-scheduler-worker-invoker@${PROJECT}.iam.gserviceaccount.com"
 
-# ── Step 3: Seed out-of-band secrets (idempotent — skipped if already set) ───
+# ── Step 3: Seed github_token before Terraform (Cloud Build connection needs it) ─
 echo ""
-echo "=== Step 3: Seeding Secret Manager secrets ==="
-
-# github_token must exist before Cloud Build connection can be created
-seed_secret_if_empty "iga-scheduler-github-token"      "$GITHUB_PAT"
-seed_secret_if_empty "iga-scheduler-iga-client-id"    "$IGA_CLIENT_ID"
-seed_secret_if_empty "iga-scheduler-iga-client-secret" "$IGA_CLIENT_SECRET"
-seed_secret_if_empty "iga-scheduler-es-api-key"        "$ES_API_KEY"
+echo "=== Step 3: Seeding github_token secret ==="
+seed_secret_if_empty "iga-scheduler-github-token" "$GITHUB_PAT"
 
 # ── Step 4: Terraform apply ───────────────────────────────────────────────────
 echo ""
 echo "=== Step 4: Terraform apply ==="
 terraform apply -input=false -auto-approve "$@"
+
+# ── Step 4b: Seed remaining secrets (shells created by Terraform apply above) ─
+echo ""
+echo "=== Step 4b: Seeding app secrets ==="
+seed_secret_if_empty "iga-scheduler-iga-client-id"     "$IGA_CLIENT_ID"
+seed_secret_if_empty "iga-scheduler-iga-client-secret" "$IGA_CLIENT_SECRET"
+seed_secret_if_empty "iga-scheduler-es-api-key"        "$ES_API_KEY"
 
 # ── Step 5: npm preflight + bootstrap ────────────────────────────────────────
 echo ""

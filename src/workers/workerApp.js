@@ -13,10 +13,15 @@ export function createWorkerApp({
 
   app.get("/health", (_req, res) => res.json({ status: "ok" }));
 
-  const auth = authMiddleware ?? createInternalAuthMiddleware({
-    expectedAudience: workerUrl,
-    expectedServiceAccountEmail: workerInvokerServiceAccount
-  });
+  // On first deploy RUNTIME_WORKER_URL is unknown, so workerUrl is empty.
+  // Use a passthrough so the service starts and /health responds, allowing
+  // Cloud Run to assign a URL. Second deploy wires in the real URL and enforces auth.
+  const auth = authMiddleware ?? (workerUrl
+    ? createInternalAuthMiddleware({
+        expectedAudience: workerUrl,
+        expectedServiceAccountEmail: workerInvokerServiceAccount
+      })
+    : (_req, _res, next) => next());
 
   const activeExecutions = new Set();
 

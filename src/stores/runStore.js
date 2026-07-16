@@ -92,6 +92,18 @@ export class RunStore {
     return { created: rowCount === 1 };
   }
 
+  async listStaleRunningIds({ thresholdMs, limit = 100 } = {}) {
+    const { rows } = await this.pool.query(
+      `SELECT run_id FROM job_runs
+       WHERE state = 'RUNNING'
+         AND started_at < now() - ($1 * interval '1 millisecond')
+       ORDER BY started_at
+       LIMIT $2`,
+      [thresholdMs, limit]
+    );
+    return rows.map((r) => r.run_id);
+  }
+
   async listQueuedRunIds({ limit = 100 } = {}) {
     const { rows } = await this.pool.query(
       "SELECT run_id FROM job_runs WHERE state = 'QUEUED' ORDER BY created_at LIMIT $1",

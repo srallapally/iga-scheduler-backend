@@ -7,6 +7,7 @@ import { RunStore } from "./stores/runStore.js";
 import { WorkerServiceRuntimeLauncher } from "./services/workerServiceRuntimeLauncher.js";
 import { JobInstanceService } from "./services/jobInstanceService.js";
 import { RunDispatcher } from "./services/runDispatcher.js";
+import { StaleRunSweeper } from "./services/staleRunSweeper.js";
 import { SchedulerTickService } from "./services/schedulerTickService.js";
 import { WorkerRunService } from "./services/workerRunService.js";
 
@@ -42,6 +43,12 @@ export async function startApplication({ pool: injectedPool } = {}) {
     batchSize: parseInt(process.env.DISPATCH_POLL_BATCH_SIZE || "10", 10)
   });
 
+  const sweeper = new StaleRunSweeper({
+    runStore,
+    intervalMs: parseInt(process.env.STALE_RUN_SWEEP_INTERVAL_MS || "60000", 10),
+    thresholdMs: parseInt(process.env.STALE_RUN_THRESHOLD_MS || String((1800 + 60) * 1000), 10)
+  });
+
   const readiness = {
     status: "ok",
     environment: process.env.NODE_ENV || "development",
@@ -66,9 +73,11 @@ export async function startApplication({ pool: injectedPool } = {}) {
   });
 
   dispatcher.start();
+  sweeper.start();
 
   process.on("SIGTERM", () => {
     dispatcher.stop();
+    sweeper.stop();
     server.close(() => {
       pool.end().finally(() => process.exit(0));
     });

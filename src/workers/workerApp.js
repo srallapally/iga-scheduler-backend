@@ -6,7 +6,8 @@ export function createWorkerApp({
   authMiddleware,
   workerUrl = process.env.RUNTIME_WORKER_URL,
   workerInvokerServiceAccount = process.env.RUNTIME_SERVICE_ACCOUNT_EMAIL,
-  maxDrainMs = (Number(process.env.WORKER_MAX_TIMEOUT_SECONDS || 1800) + 30) * 1000
+  maxDrainMs = (Number(process.env.WORKER_MAX_TIMEOUT_SECONDS || 1800) + 30) * 1000,
+  onExecutionError = null
 } = {}) {
   const app = express();
   app.use(express.json());
@@ -53,8 +54,15 @@ export function createWorkerApp({
     res.status(202).json({ status: "accepted", runId });
 
     const promise = executor.execute({ runId, run: { runId }, execution, context })
-      .catch((err) => {
+      .catch(async (err) => {
         console.error(`[worker] execution failed for run ${runId}:`, err.message);
+        if (onExecutionError) {
+          try {
+            await onExecutionError({ runId, error: err });
+          } catch (callbackErr) {
+            console.error(`[worker] onExecutionError callback failed for run ${runId}:`, callbackErr.message);
+          }
+        }
       });
     track(promise);
   });

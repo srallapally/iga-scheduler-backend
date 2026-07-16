@@ -2,7 +2,7 @@ import { CronExpressionParser } from "cron-parser";
 
 export function computeNextFireAt(schedule, fromDate = new Date()) {
   if (!schedule || schedule.type !== "cron") {
-    throw new Error("Only cron schedules are supported in Phase 4");
+    throw new Error("Only cron schedules are supported");
   }
 
   try {

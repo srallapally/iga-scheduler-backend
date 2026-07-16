@@ -118,6 +118,29 @@ describe("StaleRunSweeper", () => {
     sweeper.stop();
   });
 
+  it("skips a tick when a prior sweep is still running", async () => {
+    let resolveFirst;
+    const firstSweepPromise = new Promise((r) => { resolveFirst = r; });
+    const runStore = {
+      listStaleRunningIds: vi.fn(async () => { await firstSweepPromise; return []; }),
+      listStaleCancellingIds: vi.fn(async () => []),
+      markFailed: vi.fn(),
+      markCancelled: vi.fn()
+    };
+    const sweeper = new StaleRunSweeper({ runStore, intervalMs: 100 });
+    sweeper.start();
+    // First tick fires at 100ms; let it start but not finish
+    await vi.advanceTimersByTimeAsync(100);
+    // Second tick fires at 200ms while first is still in-flight
+    await vi.advanceTimersByTimeAsync(100);
+    resolveFirst();
+    // Allow microtasks to flush
+    await vi.advanceTimersByTimeAsync(0);
+    // listStaleRunningIds should only have been called once (second tick skipped)
+    expect(runStore.listStaleRunningIds).toHaveBeenCalledTimes(1);
+    sweeper.stop();
+  });
+
   it("calls markCancelled for each stale CANCELLING run with STALE_CANCELLING error code", async () => {
     const runStore = makeRunStore({ staleCancellingIds: ["cancel-1", "cancel-2"] });
     const sweeper = new StaleRunSweeper({ runStore, intervalMs: 1000 });

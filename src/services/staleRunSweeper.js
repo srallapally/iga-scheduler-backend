@@ -15,6 +15,7 @@ export class StaleRunSweeper {
     this.batchSize = batchSize;
     this.logger = logger;
     this._timer = null;
+    this._sweeping = false;
   }
 
   start() {
@@ -27,8 +28,14 @@ export class StaleRunSweeper {
   }
 
   async _sweep() {
-    await this._sweepRunning();
-    await this._sweepCancelling();
+    if (this._sweeping) return;
+    this._sweeping = true;
+    try {
+      await this._sweepRunning();
+      await this._sweepCancelling();
+    } finally {
+      this._sweeping = false;
+    }
   }
 
   async _sweepRunning() {

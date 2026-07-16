@@ -10,7 +10,7 @@ import { SecretManagerParameterResolver } from "./secretManagerParameterResolver
 
 export class WorkerRunService {
   constructor({
-    esClient = createEsClient(),
+    esClient = null,
     runStore = null,
     storage = null,
     definitionsIndex = null,
@@ -29,7 +29,7 @@ export class WorkerRunService {
       throw new Error("isolatedRuntimeLauncher is required when executionMode is isolated");
     }
 
-    this.esClient = esClient;
+    this._esClient = esClient;
     this.runStore = runStore;
     this.storage = storage;
     this._definitionsIndex = definitionsIndex;
@@ -44,6 +44,11 @@ export class WorkerRunService {
     this.maxLocalConcurrency = maxLocalConcurrency;
     this.localRunning = 0;
     this.parameterResolver = parameterResolver;
+  }
+
+  get esClient() {
+    if (!this._esClient) this._esClient = createEsClient();
+    return this._esClient;
   }
 
   get definitionsIndex() {

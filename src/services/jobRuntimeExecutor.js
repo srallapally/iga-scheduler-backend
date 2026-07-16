@@ -196,7 +196,7 @@ export class JobRuntimeExecutor {
         IGA_SCHEDULER_RUN_ID: runId,
         IGA_SCHEDULER_CONTEXT_FILE: contextFilePath,
         PYTHONPATH: pythonPath,
-        ...(process.env.IGA_BROKER_URL ? { IGA_BROKER_URL: process.env.IGA_BROKER_URL } : {}),
+        ...(process.env.RUNTIME_BROKER_URL ? { IGA_BROKER_URL: process.env.RUNTIME_BROKER_URL } : {}),
         ...(process.env.IGA_BASE_URL ? { IGA_BASE_URL: process.env.IGA_BASE_URL } : {}),
         ...(process.env.IGA_TOKEN_ENDPOINT ? { IGA_TOKEN_ENDPOINT: process.env.IGA_TOKEN_ENDPOINT } : {}),
         ...(process.env.IGA_CLIENT_ID ? { IGA_CLIENT_ID: process.env.IGA_CLIENT_ID } : {}),

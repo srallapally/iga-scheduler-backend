@@ -22,11 +22,11 @@ function createMiddleware(overrides = {}) {
 
 describe("publicAuth middleware", () => {
   it("throws at construction when issuer is missing", () => {
-    expect(() => createPublicAuthMiddleware({ audience: "https://scheduler.example.test" })).toThrow("PUBLIC_API_ISSUER is required");
+    expect(() => createPublicAuthMiddleware({ issuer: null, audience: "https://scheduler.example.test" })).toThrow("PUBLIC_API_ISSUER is required");
   });
 
   it("throws at construction when audience is missing", () => {
-    expect(() => createPublicAuthMiddleware({ issuer: "https://auth.example.test" })).toThrow("PUBLIC_API_AUDIENCE is required");
+    expect(() => createPublicAuthMiddleware({ issuer: "https://auth.example.test", audience: null })).toThrow("PUBLIC_API_AUDIENCE is required");
   });
 
   it("rejects missing Authorization header with 401", async () => {

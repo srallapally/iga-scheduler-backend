@@ -113,6 +113,8 @@ describe("JobDefinitionService", () => {
     expect(storageMock.file.save).toHaveBeenCalledTimes(1);
     expect(doc.jobZip.uri).toMatch(/^gs:\/\/job-bucket\/approved\/risk-score\//);
     expect(doc.jobZip.uri).not.toMatch(/^gs:\/\/job-bucket\/approved\/risk-score\/1\//);
+    expect(doc.jobZip.approval).toMatchObject({ status: "APPROVED", sha256: doc.jobZip.sha256, generation: "123" });
+    expect(doc.jobZip.scan).toMatchObject({ status: "CLEAN", sha256: doc.jobZip.sha256 });
   });
 
   it("deletes uploaded approved artifact when ES create fails", async () => {

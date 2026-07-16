@@ -9,7 +9,7 @@ import { JobRuntimeExecutor } from "../src/services/jobRuntimeExecutor.js";
 const execFileAsync = promisify(execFile);
 
 function createExecutor(options = {}) {
-  return new JobRuntimeExecutor({ runtimeIsolationEnabled: true, ...options });
+  return new JobRuntimeExecutor({ requireRuntimeIsolation: false, ...options });
 }
 
 async function createZip(entries) {

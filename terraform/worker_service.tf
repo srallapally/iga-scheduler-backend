@@ -44,6 +44,13 @@ resource "google_cloud_run_v2_service" "worker" {
         name  = "GCP_PROJECT_ID"
         value = var.project_id
       }
+
+      env {
+        # Cloud Run container boundary is the isolation layer here.
+        # The guard in JobRuntimeExecutor is for local dev only.
+        name  = "WORKER_REQUIRE_RUNTIME_ISOLATION"
+        value = "false"
+      }
     }
   }
 

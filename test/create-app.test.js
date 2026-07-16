@@ -91,6 +91,30 @@ describe("createApp", () => {
     expect(response.body).toEqual({ status: "ok" });
   });
 
+  it("/ready returns 200 with esConnected:true when esClient.ping() resolves", async () => {
+    const esClient = { ping: vi.fn(async () => true) };
+    const app = createTestApp({ esClient });
+    const response = await request(app).get("/ready");
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({ esConnected: true });
+  });
+
+  it("/ready returns 503 with esConnected:false when esClient.ping() rejects", async () => {
+    const esClient = { ping: vi.fn(async () => { throw new Error("connection refused"); }) };
+    const app = createTestApp({ esClient });
+    const response = await request(app).get("/ready");
+    expect(response.status).toBe(503);
+    expect(response.body).toMatchObject({ status: "unavailable", esConnected: false });
+  });
+
+  it("/ready returns 200 without esConnected when no esClient is injected", async () => {
+    const readiness = { status: "ok", environment: "test" };
+    const app = createTestApp({ readiness });
+    const response = await request(app).get("/ready");
+    expect(response.status).toBe(200);
+    expect(response.body).not.toHaveProperty("esConnected");
+  });
+
   it("passes the injected workerRunService to the internal worker router", async () => {
     const workerRunService = {
       executeRun: vi.fn(async ({ runId }) => ({ status: "dispatched", runId, state: "RUNNING" }))

@@ -9,7 +9,7 @@ import { createInternalSchedulerRouter } from "./routes/internalScheduler.js";
 import { createInternalWorkerRouter } from "./routes/internalWorker.js";
 import { createPublicAuthMiddleware } from "./middleware/publicAuth.js";
 
-export function createApp({ workerRunService, runStore, jobInstanceService, jobDefinitionService, readiness = createDefaultReadiness(), publicAuthOptions, internalIgaOptions = {}, internalRuntimeIgaOptions = {}, internalSchedulerOptions = {}, internalWorkerOptions = {} } = {}) {
+export function createApp({ workerRunService, runStore, esClient, jobInstanceService, jobDefinitionService, readiness = createDefaultReadiness(), publicAuthOptions, internalIgaOptions = {}, internalRuntimeIgaOptions = {}, internalSchedulerOptions = {}, internalWorkerOptions = {} } = {}) {
   const app = express();
   const cachedReadiness = { ...readiness };
 
@@ -26,7 +26,15 @@ export function createApp({ workerRunService, runStore, jobInstanceService, jobD
   app.get("/health", (_req, res) => {
     res.json({ status: "ok" });
   });
-  app.get("/ready", (_req, res) => {
+  app.get("/ready", async (_req, res) => {
+    if (esClient) {
+      try {
+        await esClient.ping();
+      } catch {
+        return res.status(503).json({ ...cachedReadiness, status: "unavailable", esConnected: false });
+      }
+      return res.json({ ...cachedReadiness, esConnected: true });
+    }
     res.json(cachedReadiness);
   });
 

@@ -1,5 +1,6 @@
 import { pathToFileURL } from "node:url";
 import { createPgPool } from "./clients/pgClient.js";
+import { createEsClient } from "./clients/esClient.js";
 import { validateProductionStartupConfig } from "./config/productionValidation.js";
 import { createApp } from "./createApp.js";
 import { InstanceStore } from "./stores/instanceStore.js";
@@ -25,6 +26,7 @@ export async function startApplication({ pool: injectedPool } = {}) {
     : null;
 
   const pool = injectedPool || await createPgPool();
+  const esClient = createEsClient();
   const runStore = new RunStore({ pool });
   const instanceStore = new InstanceStore({ pool });
 
@@ -63,6 +65,7 @@ export async function startApplication({ pool: injectedPool } = {}) {
     workerRunService,
     readiness,
     runStore,
+    esClient,
     jobInstanceService,
     internalSchedulerOptions: { service: tickService }
   });

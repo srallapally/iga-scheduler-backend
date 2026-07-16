@@ -25,12 +25,12 @@ function makeFetch(overrides = {}) {
 
 describe("WorkerServiceRuntimeLauncher", () => {
   it("throws when workerUrl is missing", () => {
-    expect(() => new WorkerServiceRuntimeLauncher({ runtimeServiceAccount: SERVICE_ACCOUNT }))
+    expect(() => new WorkerServiceRuntimeLauncher({ workerUrl: "", runtimeServiceAccount: SERVICE_ACCOUNT }))
       .toThrow("RUNTIME_WORKER_URL is required");
   });
 
   it("throws when runtimeServiceAccount is missing", () => {
-    expect(() => new WorkerServiceRuntimeLauncher({ workerUrl: WORKER_URL }))
+    expect(() => new WorkerServiceRuntimeLauncher({ workerUrl: WORKER_URL, runtimeServiceAccount: "" }))
       .toThrow("RUNTIME_SERVICE_ACCOUNT_EMAIL is required");
   });
 

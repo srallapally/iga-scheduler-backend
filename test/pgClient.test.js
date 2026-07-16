@@ -53,7 +53,7 @@ function baseProductionEnv(overrides = {}) {
     SCHEDULER_OIDC_AUDIENCE: "https://sched.test",
     SCHEDULER_INVOKER_SERVICE_ACCOUNT_EMAIL: "sched@proj.iam.gserviceaccount.com",
     WORKER_EXECUTION_MODE: "isolated",
-    RUNTIME_CLOUD_RUN_JOB_NAME: "job",
+    RUNTIME_WORKER_URL: "https://worker.test",
     RUNTIME_SERVICE_ACCOUNT_EMAIL: "runtime@proj.iam.gserviceaccount.com",
     RUNTIME_BROKER_URL: "https://worker.test/internal/runtime-broker",
     IGA_TOKEN_ENDPOINT: "https://iga.test/token",

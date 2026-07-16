@@ -34,7 +34,6 @@ function workerProductionEnv(overrides = {}) {
   return {
     NODE_ENV: "production",
     GCP_PROJECT_ID: "iga-scheduler",
-    RUNTIME_WORKER_URL: "https://worker.example.test",
     RUNTIME_SERVICE_ACCOUNT_EMAIL: "iga-runtime@iga-scheduler.iam.gserviceaccount.com",
     RUNTIME_BROKER_URL: "https://scheduler.example.test",
     IGA_TOKEN_ENDPOINT: "https://iga.example.test/oauth2/token",
@@ -57,7 +56,6 @@ describe("validateWorkerStartupConfig", () => {
 
   it.each([
     "GCP_PROJECT_ID",
-    "RUNTIME_WORKER_URL",
     "RUNTIME_SERVICE_ACCOUNT_EMAIL",
     "RUNTIME_BROKER_URL",
     "IGA_TOKEN_ENDPOINT",
@@ -67,6 +65,12 @@ describe("validateWorkerStartupConfig", () => {
   ])("rejects missing %s", (varName) => {
     expect(() => validateWorkerStartupConfig({ env: workerProductionEnv({ [varName]: "" }) }))
       .toThrow(`Missing required worker environment variables: ${varName}`);
+  });
+
+  it("accepts config without RUNTIME_WORKER_URL — worker never reads it", () => {
+    const env = workerProductionEnv();
+    delete env.RUNTIME_WORKER_URL;
+    expect(validateWorkerStartupConfig({ env })).toEqual({ status: "ok" });
   });
 
   it("rejects WORKER_REQUIRE_RUNTIME_ISOLATION not set to false", () => {

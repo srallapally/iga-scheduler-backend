@@ -3,7 +3,6 @@ export function validateWorkerStartupConfig({ env = process.env } = {}) {
 
   const required = [
     "GCP_PROJECT_ID",
-    "RUNTIME_WORKER_URL",
     "RUNTIME_SERVICE_ACCOUNT_EMAIL",
     "RUNTIME_BROKER_URL",
     "IGA_TOKEN_ENDPOINT",

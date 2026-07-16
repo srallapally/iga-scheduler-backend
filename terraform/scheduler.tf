@@ -16,13 +16,6 @@ resource "google_service_account" "scheduler_tick_invoker" {
   description  = "Invokes the internal scheduler tick endpoint via Cloud Scheduler OIDC."
 }
 
-resource "google_service_account" "worker_task_invoker" {
-  project      = var.project_id
-  account_id   = var.worker_task_invoker_service_account_id
-  display_name = "IGA Scheduler worker task invoker"
-  description  = "Used in Cloud Tasks OIDC tokens when invoking the internal worker route."
-}
-
 resource "google_cloud_run_service_iam_member" "scheduler_tick_invoker" {
   project  = var.project_id
   location = var.region
@@ -31,15 +24,9 @@ resource "google_cloud_run_service_iam_member" "scheduler_tick_invoker" {
   member   = "serviceAccount:${google_service_account.scheduler_tick_invoker.email}"
 }
 
-resource "google_cloud_run_service_iam_member" "worker_task_invoker" {
-  project  = var.project_id
-  location = var.region
-  service  = var.cloud_run_service_name
-  role     = "roles/run.invoker"
-  member   = "serviceAccount:${google_service_account.worker_task_invoker.email}"
-}
-
 resource "google_cloud_scheduler_job" "scheduler_tick" {
+  count = var.cloud_run_service_url != "" ? 1 : 0
+
   project          = var.project_id
   region           = var.region
   name             = var.scheduler_job_name

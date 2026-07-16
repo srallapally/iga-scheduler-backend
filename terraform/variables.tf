@@ -101,17 +101,6 @@ variable "scheduler_tick_service_account_id" {
   }
 }
 
-variable "worker_task_invoker_service_account_id" {
-  description = "Service account ID used in Cloud Tasks OIDC tokens when invoking the worker route."
-  type        = string
-  default     = "iga-scheduler-worker-invoker"
-
-  validation {
-    condition     = can(regex("^[a-z]([a-z0-9-]{4,28}[a-z0-9])$", var.worker_task_invoker_service_account_id))
-    error_message = "worker_task_invoker_service_account_id must be 6-30 characters, start with a lowercase letter, and contain only lowercase letters, numbers, and hyphens."
-  }
-}
-
 variable "scheduler_tick_body" {
   description = "JSON body sent by Cloud Scheduler to the internal tick route."
   type        = any

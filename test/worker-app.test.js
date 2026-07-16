@@ -67,6 +67,26 @@ describe("POST /execute", () => {
     // Give the background promise time to reject
     await vi.waitFor(() => expect(executor.execute).toHaveBeenCalledOnce());
   });
+
+  it("calls onExecutionError with runId and error when executor rejects", async () => {
+    const err = new Error("execution boom");
+    err.code = "RUNTIME_PROCESS_FAILED";
+    const executor = { execute: vi.fn(() => Promise.reject(err)) };
+    const onExecutionError = vi.fn(async () => {});
+    const app = createWorkerApp({ executor, authMiddleware: noopAuth, onExecutionError });
+    await request(app).post("/execute").send(VALID_BODY);
+    await vi.waitFor(() => expect(onExecutionError).toHaveBeenCalledOnce());
+    expect(onExecutionError).toHaveBeenCalledWith({ runId: "run-1", error: err });
+  });
+
+  it("does not crash when onExecutionError itself throws", async () => {
+    const executor = { execute: vi.fn(() => Promise.reject(new Error("boom"))) };
+    const onExecutionError = vi.fn(async () => { throw new Error("callback failed"); });
+    const app = createWorkerApp({ executor, authMiddleware: noopAuth, onExecutionError });
+    const res = await request(app).post("/execute").send(VALID_BODY);
+    expect(res.status).toBe(202);
+    await vi.waitFor(() => expect(onExecutionError).toHaveBeenCalledOnce());
+  });
 });
 
 describe("GET /health", () => {

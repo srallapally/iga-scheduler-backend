@@ -104,6 +104,30 @@ export class RunStore {
     return rows.map((r) => r.run_id);
   }
 
+  async listStaleCancellingIds({ thresholdMs, limit = 100 } = {}) {
+    const { rows } = await this.pool.query(
+      `SELECT run_id FROM job_runs
+       WHERE state = 'CANCELLING'
+         AND started_at < now() - ($1 * interval '1 millisecond')
+       ORDER BY started_at
+       LIMIT $2`,
+      [thresholdMs, limit]
+    );
+    return rows.map((r) => r.run_id);
+  }
+
+  async markCancelled({ runId, endedAt, error, status } = {}) {
+    const { rows } = await this.pool.query(
+      `UPDATE job_runs
+         SET state = 'CANCELLED', ended_at = $2, heartbeat_at = $2,
+             status = $3, error = $4, updated_at = $2
+       WHERE run_id = $1 AND state = 'CANCELLING'
+       RETURNING run_id`,
+      [runId, endedAt, status ?? { phase: "cancelled", message: "Run force-cancelled by stale sweeper" }, error ?? null]
+    );
+    return rows.length > 0;
+  }
+
   async listQueuedRunIds({ limit = 100 } = {}) {
     const { rows } = await this.pool.query(
       "SELECT run_id FROM job_runs WHERE state = 'QUEUED' ORDER BY created_at LIMIT $1",

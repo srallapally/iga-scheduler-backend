@@ -37,7 +37,31 @@ const PYTHON_BIN_ENV_OVERRIDES = {
 const PYTHON_SDK_PATH = fileURLToPath(new URL("../../sdk/python", import.meta.url));
 
 export class JobRuntimeExecutor {
-  constructor({ allowedRuntimes = DEFAULT_ALLOWED_RUNTIMES, defaultTimeoutSeconds = DEFAULT_TIMEOUT_SECONDS, maxTimeoutSeconds = Number(process.env.WORKER_MAX_TIMEOUT_SECONDS || DEFAULT_MAX_TIMEOUT_SECONDS), defaultMemoryLimitMb = DEFAULT_MEMORY_LIMIT_MB, maxMemoryLimitMb = Number(process.env.WORKER_MAX_MEMORY_MB || DEFAULT_MAX_MEMORY_LIMIT_MB), maxStdoutBytes = DEFAULT_MAX_STDOUT_BYTES, maxStderrBytes = DEFAULT_MAX_STDERR_BYTES, maxResultOutputBytes = Number(process.env.WORKER_MAX_RESULT_OUTPUT_BYTES || DEFAULT_MAX_RESULT_OUTPUT_BYTES), requireRuntimeIsolation = process.env.WORKER_REQUIRE_RUNTIME_ISOLATION !== "false", runtimeIsolationEnabled = process.env.WORKER_RUNTIME_ISOLATION === "gvisor" || process.env.WORKER_RUNTIME_ISOLATION === "sandboxed-cloud-run-job", killGraceMs = Number(process.env.WORKER_RUNTIME_KILL_GRACE_MS || DEFAULT_KILL_GRACE_MS) } = {}) { this.allowedRuntimes = this.normalizeAllowedRuntimes(allowedRuntimes); this.defaultTimeoutSeconds = defaultTimeoutSeconds; this.maxTimeoutSeconds = maxTimeoutSeconds; this.defaultMemoryLimitMb = defaultMemoryLimitMb; this.maxMemoryLimitMb = maxMemoryLimitMb; this.maxStdoutBytes = maxStdoutBytes; this.maxStderrBytes = maxStderrBytes; this.maxResultOutputBytes = maxResultOutputBytes; this.requireRuntimeIsolation = requireRuntimeIsolation; this.runtimeIsolationEnabled = runtimeIsolationEnabled; this.killGraceMs = killGraceMs; }
+  constructor({
+    allowedRuntimes = DEFAULT_ALLOWED_RUNTIMES,
+    defaultTimeoutSeconds = DEFAULT_TIMEOUT_SECONDS,
+    maxTimeoutSeconds = Number(process.env.WORKER_MAX_TIMEOUT_SECONDS || DEFAULT_MAX_TIMEOUT_SECONDS),
+    defaultMemoryLimitMb = DEFAULT_MEMORY_LIMIT_MB,
+    maxMemoryLimitMb = Number(process.env.WORKER_MAX_MEMORY_MB || DEFAULT_MAX_MEMORY_LIMIT_MB),
+    maxStdoutBytes = DEFAULT_MAX_STDOUT_BYTES,
+    maxStderrBytes = DEFAULT_MAX_STDERR_BYTES,
+    maxResultOutputBytes = Number(process.env.WORKER_MAX_RESULT_OUTPUT_BYTES || DEFAULT_MAX_RESULT_OUTPUT_BYTES),
+    // Set WORKER_REQUIRE_RUNTIME_ISOLATION=false in environments where the
+    // container boundary itself provides isolation (e.g. the worker Cloud Run service).
+    requireRuntimeIsolation = process.env.WORKER_REQUIRE_RUNTIME_ISOLATION !== "false",
+    killGraceMs = Number(process.env.WORKER_RUNTIME_KILL_GRACE_MS || DEFAULT_KILL_GRACE_MS)
+  } = {}) {
+    this.allowedRuntimes = this.normalizeAllowedRuntimes(allowedRuntimes);
+    this.defaultTimeoutSeconds = defaultTimeoutSeconds;
+    this.maxTimeoutSeconds = maxTimeoutSeconds;
+    this.defaultMemoryLimitMb = defaultMemoryLimitMb;
+    this.maxMemoryLimitMb = maxMemoryLimitMb;
+    this.maxStdoutBytes = maxStdoutBytes;
+    this.maxStderrBytes = maxStderrBytes;
+    this.maxResultOutputBytes = maxResultOutputBytes;
+    this.requireRuntimeIsolation = requireRuntimeIsolation;
+    this.killGraceMs = killGraceMs;
+  }
 
   async execute({ runId, run, execution, artifactBuffer, context } = {}) {
     const resolvedBuffer = await this.resolveArtifactBuffer({ execution, artifactBuffer });
@@ -132,7 +156,11 @@ export class JobRuntimeExecutor {
     };
   }
 
-  validateRuntimeIsolation() { if (this.requireRuntimeIsolation && !this.runtimeIsolationEnabled) throw this.validationError("RUNTIME_ISOLATION_REQUIRED", "runtime isolation is required before executing untrusted job artifacts", { retryable: false }); }
+  validateRuntimeIsolation() {
+    if (this.requireRuntimeIsolation) {
+      throw this.validationError("RUNTIME_ISOLATION_REQUIRED", "runtime isolation is required before executing untrusted job artifacts; set WORKER_REQUIRE_RUNTIME_ISOLATION=false in environments where the container provides isolation", { retryable: false });
+    }
+  }
   async writeContextFile({ extractDir, context }) { const contextDir = path.join(extractDir, CONTEXT_DIR); const contextFilePath = path.join(contextDir, CONTEXT_FILE); await fs.mkdir(contextDir, { recursive: true, mode: 0o700 }); await fs.writeFile(contextFilePath, JSON.stringify(context, null, 2), { encoding: "utf8", mode: 0o600 }); return contextFilePath; }
 
   executeNodeEntrypoint({ runId, execution, extracted, contextFilePath }) {

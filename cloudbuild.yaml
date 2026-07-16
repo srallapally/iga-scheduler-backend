@@ -136,7 +136,7 @@ steps:
         OUT=/workspace/tf-outputs.json
         SCHEDULER_SA=$$(jq -r '.scheduler_service_account_email.value' "$$OUT")
         RUNTIME_SA=$$(jq -r '.runtime_service_account_email.value' "$$OUT")
-        WORKER_INVOKER_SA=$$(jq -r '.worker_task_invoker_email.value' "$$OUT")
+        WORKER_INVOKER_SA=$$(jq -r '.scheduler_service_account_email.value' "$$OUT")
         SCHEDULER_TICK_SA=$$(jq -r '.scheduler_tick_invoker_email.value' "$$OUT")
         DB_CONN=$$(jq -r '.db_instance_connection_name.value' "$$OUT")
         VPC_CONNECTOR=$$(jq -r '.vpc_connector_id.value' "$$OUT")

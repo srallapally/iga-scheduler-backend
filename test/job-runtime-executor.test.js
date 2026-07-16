@@ -296,4 +296,28 @@ describe("JobRuntimeExecutor - Python support", () => {
     expect(() => executor.resolvePythonBinary("python310"))
       .toThrow(expect.objectContaining({ code: "RUNTIME_VERSION_UNSUPPORTED" }));
   });
+
+  it("maps RUNTIME_BROKER_URL to IGA_BROKER_URL in Python child env", async () => {
+    const executor = createExecutor();
+    const capturedEnvs = [];
+    const origSpawn = executor._spawnEntrypoint.bind(executor);
+    executor._spawnEntrypoint = (opts) => { capturedEnvs.push(opts.extraEnv); return origSpawn(opts); };
+
+    const originalBrokerUrl = process.env.RUNTIME_BROKER_URL;
+    process.env.RUNTIME_BROKER_URL = "https://broker.test.example.com";
+    try {
+      await executor.executePythonEntrypoint({
+        runId: "run-1",
+        execution: { definition: { runtime: "python", runtimeVersion: "python311", entrypoint: "main.py" } },
+        extracted: { extractDir: "/tmp", entrypointPath: "main.py", cleanup: async () => {} },
+        contextFilePath: "/tmp/context.json"
+      }).catch(() => {});
+    } finally {
+      if (originalBrokerUrl === undefined) delete process.env.RUNTIME_BROKER_URL;
+      else process.env.RUNTIME_BROKER_URL = originalBrokerUrl;
+    }
+
+    expect(capturedEnvs).toHaveLength(1);
+    expect(capturedEnvs[0].IGA_BROKER_URL).toBe("https://broker.test.example.com");
+  });
 });

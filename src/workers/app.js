@@ -1,8 +1,10 @@
 import { pathToFileURL } from "node:url";
+import { validateWorkerStartupConfig } from "../config/productionValidation.js";
 import { JobRuntimeExecutor } from "../services/jobRuntimeExecutor.js";
 import { createWorkerApp } from "./workerApp.js";
 
 export function startWorker() {
+  validateWorkerStartupConfig();
   const executor = new JobRuntimeExecutor();
   const app = createWorkerApp({ executor });
   const port = Number(process.env.PORT || 8080);

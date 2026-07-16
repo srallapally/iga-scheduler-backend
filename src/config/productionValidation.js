@@ -1,3 +1,27 @@
+export function validateWorkerStartupConfig({ env = process.env } = {}) {
+  if (env.NODE_ENV !== "production") return { status: "skipped", reason: "not_production" };
+
+  const required = [
+    "GCP_PROJECT_ID",
+    "RUNTIME_WORKER_URL",
+    "RUNTIME_SERVICE_ACCOUNT_EMAIL",
+    "RUNTIME_BROKER_URL",
+    "IGA_TOKEN_ENDPOINT",
+    "IGA_CLIENT_ID",
+    "IGA_CLIENT_SECRET",
+    "IGA_BASE_URL"
+  ];
+
+  const missing = required.filter((name) => !env[name]);
+  if (missing.length > 0) throw new Error(`Missing required worker environment variables: ${missing.join(", ")}`);
+
+  if (env.WORKER_REQUIRE_RUNTIME_ISOLATION !== "false") {
+    throw new Error("WORKER_REQUIRE_RUNTIME_ISOLATION must be set to 'false' in the worker service — the Cloud Run container boundary is the isolation layer");
+  }
+
+  return { status: "ok" };
+}
+
 export function validateProductionStartupConfig({ env = process.env } = {}) {
   if (env.NODE_ENV !== "production") return { status: "skipped", reason: "not_production" };
 

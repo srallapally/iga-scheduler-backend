@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { validateProductionStartupConfig } from "../src/config/productionValidation.js";
+import { validateProductionStartupConfig, validateWorkerStartupConfig } from "../src/config/productionValidation.js";
 
 function productionEnv(overrides = {}) {
   return {
@@ -29,6 +29,56 @@ function productionEnv(overrides = {}) {
     ...overrides
   };
 }
+
+function workerProductionEnv(overrides = {}) {
+  return {
+    NODE_ENV: "production",
+    GCP_PROJECT_ID: "iga-scheduler",
+    RUNTIME_WORKER_URL: "https://worker.example.test",
+    RUNTIME_SERVICE_ACCOUNT_EMAIL: "iga-runtime@iga-scheduler.iam.gserviceaccount.com",
+    RUNTIME_BROKER_URL: "https://scheduler.example.test",
+    IGA_TOKEN_ENDPOINT: "https://iga.example.test/oauth2/token",
+    IGA_CLIENT_ID: "iga-client-id",
+    IGA_CLIENT_SECRET: "iga-client-secret",
+    IGA_BASE_URL: "https://iga.example.test",
+    WORKER_REQUIRE_RUNTIME_ISOLATION: "false",
+    ...overrides
+  };
+}
+
+describe("validateWorkerStartupConfig", () => {
+  it("skips non-production environments", () => {
+    expect(validateWorkerStartupConfig({ env: { NODE_ENV: "test" } })).toEqual({ status: "skipped", reason: "not_production" });
+  });
+
+  it("accepts a fully configured worker", () => {
+    expect(validateWorkerStartupConfig({ env: workerProductionEnv() })).toEqual({ status: "ok" });
+  });
+
+  it.each([
+    "GCP_PROJECT_ID",
+    "RUNTIME_WORKER_URL",
+    "RUNTIME_SERVICE_ACCOUNT_EMAIL",
+    "RUNTIME_BROKER_URL",
+    "IGA_TOKEN_ENDPOINT",
+    "IGA_CLIENT_ID",
+    "IGA_CLIENT_SECRET",
+    "IGA_BASE_URL"
+  ])("rejects missing %s", (varName) => {
+    expect(() => validateWorkerStartupConfig({ env: workerProductionEnv({ [varName]: "" }) }))
+      .toThrow(`Missing required worker environment variables: ${varName}`);
+  });
+
+  it("rejects WORKER_REQUIRE_RUNTIME_ISOLATION not set to false", () => {
+    expect(() => validateWorkerStartupConfig({ env: workerProductionEnv({ WORKER_REQUIRE_RUNTIME_ISOLATION: undefined }) }))
+      .toThrow("WORKER_REQUIRE_RUNTIME_ISOLATION must be set to 'false'");
+  });
+
+  it("rejects WORKER_REQUIRE_RUNTIME_ISOLATION=true", () => {
+    expect(() => validateWorkerStartupConfig({ env: workerProductionEnv({ WORKER_REQUIRE_RUNTIME_ISOLATION: "true" }) }))
+      .toThrow("WORKER_REQUIRE_RUNTIME_ISOLATION must be set to 'false'");
+  });
+});
 
 describe("validateProductionStartupConfig", () => {
   it("skips non-production environments", () => {

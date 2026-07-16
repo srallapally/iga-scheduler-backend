@@ -21,6 +21,21 @@ describe("createJobDefinitionSchema", () => {
     expect(result.definitionId).toBe("risk-score");
   });
 
+  it("rejects timeoutSeconds above 1800 — executor cap prevents higher values from taking effect", () => {
+    expect(() => createJobDefinitionSchema.parse({
+      definitionId: "x", name: "X", runtime: "javascript", runtimeVersion: "nodejs22",
+      wrapperVersion: "1.0.0", entrypoint: "index.js", timeoutSeconds: 1801
+    })).toThrow();
+  });
+
+  it("accepts timeoutSeconds of exactly 1800", () => {
+    const result = createJobDefinitionSchema.parse({
+      definitionId: "x", name: "X", runtime: "javascript", runtimeVersion: "nodejs22",
+      wrapperVersion: "1.0.0", entrypoint: "index.js", timeoutSeconds: 1800
+    });
+    expect(result.timeoutSeconds).toBe(1800);
+  });
+
   it("rejects invalid parameter names", () => {
     expect(() => createJobDefinitionSchema.parse({
       definitionId: "risk-score",

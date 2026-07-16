@@ -14,13 +14,13 @@ export const createJobDefinitionSchema = z.object({
   wrapperVersion: z.string().min(1),
   entrypoint: z.string().min(1),
   parameters: z.array(jobParameterSchema).default([]),
-  timeoutSeconds: z.number().int().min(30).max(3600).default(1800),
+  timeoutSeconds: z.number().int().min(30).max(1800).default(1800),
   memoryMb: z.number().int().min(64).max(512).optional()
 });
 
 export const patchJobDefinitionSchema = z.object({
   name: z.string().min(1).optional(),
   enabled: z.boolean().optional(),
-  timeoutSeconds: z.number().int().min(30).max(3600).optional(),
+  timeoutSeconds: z.number().int().min(30).max(1800).optional(),
   memoryMb: z.number().int().min(64).max(512).optional()
 });

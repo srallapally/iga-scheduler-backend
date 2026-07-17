@@ -7,7 +7,8 @@ export function createWorkerApp({
   workerUrl = process.env.RUNTIME_WORKER_URL,
   workerInvokerServiceAccount = process.env.WORKER_INVOKER_SERVICE_ACCOUNT_EMAIL,
   maxDrainMs = (Number(process.env.WORKER_MAX_TIMEOUT_SECONDS || 1800) + 30) * 1000,
-  onExecutionError = null
+  onExecutionError = null,
+  onExecutionSuccess = null
 } = {}) {
   const app = express();
   app.use(express.json());
@@ -54,6 +55,15 @@ export function createWorkerApp({
     res.status(202).json({ status: "accepted", runId });
 
     const promise = executor.execute({ runId, run: { runId }, execution, context })
+      .then(async (result) => {
+        if (onExecutionSuccess) {
+          try {
+            await onExecutionSuccess({ runId, result });
+          } catch (callbackErr) {
+            console.error(`[worker] onExecutionSuccess callback failed for run ${runId}:`, callbackErr.message);
+          }
+        }
+      })
       .catch(async (err) => {
         console.error(`[worker] execution failed for run ${runId}:`, err.message);
         if (onExecutionError) {

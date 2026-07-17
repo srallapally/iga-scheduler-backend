@@ -68,6 +68,25 @@ describe("POST /execute", () => {
     await vi.waitFor(() => expect(executor.execute).toHaveBeenCalledOnce());
   });
 
+  it("calls onExecutionSuccess with runId and result when executor resolves", async () => {
+    const result = { status: "completed", exitCode: 0 };
+    const executor = makeExecutor(result);
+    const onExecutionSuccess = vi.fn(async () => {});
+    const app = createWorkerApp({ executor, authMiddleware: noopAuth, onExecutionSuccess });
+    await request(app).post("/execute").send(VALID_BODY);
+    await vi.waitFor(() => expect(onExecutionSuccess).toHaveBeenCalledOnce());
+    expect(onExecutionSuccess).toHaveBeenCalledWith({ runId: "run-1", result });
+  });
+
+  it("does not crash when onExecutionSuccess itself throws", async () => {
+    const executor = makeExecutor();
+    const onExecutionSuccess = vi.fn(async () => { throw new Error("success callback failed"); });
+    const app = createWorkerApp({ executor, authMiddleware: noopAuth, onExecutionSuccess });
+    const res = await request(app).post("/execute").send(VALID_BODY);
+    expect(res.status).toBe(202);
+    await vi.waitFor(() => expect(onExecutionSuccess).toHaveBeenCalledOnce());
+  });
+
   it("calls onExecutionError with runId and error when executor rejects", async () => {
     const err = new Error("execution boom");
     err.code = "RUNTIME_PROCESS_FAILED";

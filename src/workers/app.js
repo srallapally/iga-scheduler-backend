@@ -12,6 +12,16 @@ export async function startWorker() {
   const runStore = new RunStore({ pool });
   const executor = new JobRuntimeExecutor();
 
+  async function onExecutionSuccess({ runId, result }) {
+    const endedAt = new Date().toISOString();
+    await runStore.markSucceeded({
+      runId,
+      endedAt,
+      result,
+      status: { phase: "succeeded", message: "Run completed successfully" }
+    });
+  }
+
   async function onExecutionError({ runId, error }) {
     const retryClassification = classifyWorkerError(error);
     const serialized = { code: error.code, message: error.message };
@@ -24,7 +34,7 @@ export async function startWorker() {
     });
   }
 
-  const app = createWorkerApp({ executor, onExecutionError });
+  const app = createWorkerApp({ executor, onExecutionSuccess, onExecutionError });
   const port = Number(process.env.PORT || 8080);
   const server = app.listen(port, () => {
     console.log(`IGA job worker listening on port ${port}`);

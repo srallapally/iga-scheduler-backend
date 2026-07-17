@@ -74,6 +74,19 @@ resource "google_cloud_run_v2_service_iam_member" "scheduler_service_invoke_work
 
 # ── runtime: secrets + GCS read + callback invocation ─────────────────────────
 
+resource "google_project_iam_member" "runtime_cloudsql" {
+  project = var.project_id
+  role    = "roles/cloudsql.client"
+  member  = "serviceAccount:${google_service_account.runtime.email}"
+}
+
+resource "google_secret_manager_secret_iam_member" "runtime_db_password" {
+  secret_id = google_secret_manager_secret.db_password.secret_id
+  project   = var.project_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.runtime.email}"
+}
+
 # The worker service (runtime SA) mounts IGA_CLIENT_SECRET via --set-secrets.
 # Cloud Run resolves secret bindings using the service's SA at revision creation.
 resource "google_secret_manager_secret_iam_member" "runtime_iga_client_id" {

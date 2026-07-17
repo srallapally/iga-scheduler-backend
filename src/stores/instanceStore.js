@@ -113,13 +113,13 @@ function documentToRow(doc) {
     tenant_id: doc.tenantId ?? null,
     definition_id: doc.definitionId,
     definition_version: doc.definitionVersion,
-    definition_parameter_schema: doc.definitionParameterSchema ?? [],
+    definition_parameter_schema: JSON.stringify(doc.definitionParameterSchema ?? []),
     enabled: doc.enabled,
     state: doc.state,
-    schedule: doc.schedule,
+    schedule: JSON.stringify(doc.schedule),
     next_fire_at: doc.nextFireAt ?? null,
     last_fire_at: doc.lastFireAt ?? null,
-    parameters: doc.parameters ?? {},
+    parameters: JSON.stringify(doc.parameters ?? {}),
     created_at: doc.createdAt,
     updated_at: doc.updatedAt
   };

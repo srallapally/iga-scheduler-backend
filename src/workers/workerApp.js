@@ -5,7 +5,7 @@ export function createWorkerApp({
   executor,
   authMiddleware,
   workerUrl = process.env.RUNTIME_WORKER_URL,
-  workerInvokerServiceAccount = process.env.RUNTIME_SERVICE_ACCOUNT_EMAIL,
+  workerInvokerServiceAccount = process.env.WORKER_INVOKER_SERVICE_ACCOUNT_EMAIL,
   maxDrainMs = (Number(process.env.WORKER_MAX_TIMEOUT_SECONDS || 1800) + 30) * 1000,
   onExecutionError = null
 } = {}) {

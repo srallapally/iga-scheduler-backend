@@ -1,0 +1,5 @@
+{
+  "entrypoint": "job.js",
+  "runtime": "javascript",
+  "wrapperVersion": "1.0.0"
+}

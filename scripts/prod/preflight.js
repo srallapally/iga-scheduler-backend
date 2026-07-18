@@ -161,7 +161,7 @@ if (!IS_LOCAL) {
         }
       }
 
-      const probeIndex = `__iga_preflight_probe_${Date.now()}`;
+      const probeIndex = `iga-preflight-probe-${Date.now()}`;
       try {
         await esClient.indices.create({ index: probeIndex });
         await esClient.indices.delete({ index: probeIndex });
@@ -205,13 +205,20 @@ if (!IS_LOCAL) {
       }
 
       try {
-        await pool.query("CREATE TABLE __iga_preflight_probe (id int); DROP TABLE __iga_preflight_probe;");
+        await pool.query("CREATE TABLE iga_preflight_probe (id int); DROP TABLE iga_preflight_probe;");
         pass("pg", "user has CREATE TABLE privilege");
       } catch (e) {
         fault("pg", `user lacks CREATE TABLE privilege — migrations will fail: ${e.message}`);
       }
     } catch (e) {
-      fault("pg", `unreachable: ${e.message}`);
+      // Cloud SQL is private-IP only — unreachable from outside GCP. Migrations
+      // run inside Cloud Build which has VPC access, so a timeout here is expected
+      // during operator-side preflight.
+      if (e.message?.includes("ETIMEDOUT") || e.message?.includes("ECONNREFUSED")) {
+        warn("pg", `unreachable from local network (private IP only) — skipping. Migrations run in Cloud Build.`);
+      } else {
+        fault("pg", `unreachable: ${e.message}`);
+      }
     } finally {
       if (pool) await pool.end().catch(() => {});
     }
@@ -256,6 +263,8 @@ if (!IS_LOCAL) {
   const workerUrl = env("RUNTIME_WORKER_URL");
   if (!workerUrl) {
     fault("worker-service", "RUNTIME_WORKER_URL not set — required in production");
+  } else if (workerUrl === "https://placeholder") {
+    warn("worker-service", "RUNTIME_WORKER_URL is placeholder — first deploy, worker not yet created. Re-run after Cloud Build deploys the service.");
   } else {
     const elapsed = stopwatch();
     try {

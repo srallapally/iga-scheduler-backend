@@ -1,158 +1,161 @@
 # Architecture Review: iga-scheduler-backend
 
 **Reviewer perspective:** Software / Technical Architect
-**Criteria:** Same functionality · fewer moving parts · lower cost
+**Review:** Fourth pass — exhaustive, post-fix state, July 2026
+**Hard constraint:** Elasticsearch and Postgres must coexist. IGA owns Elasticsearch; consolidation is not an option.
 
 ---
 
-## Current Service Inventory
+## Service Inventory
 
 | Layer | Services |
 |---|---|
-| Compute | Cloud Run (scheduler) + Cloud Run (worker) |
-| Data | Cloud SQL Postgres + Elasticsearch |
-| Storage | GCS |
-| Queue / Trigger | Cloud Scheduler + Postgres poll loop |
+| Compute | Cloud Run (scheduler service) + Cloud Run (worker service) |
+| Data | Cloud SQL Postgres (instances, runs) + Elasticsearch (definitions, audit events) |
+| Storage | GCS (artifact ZIPs) |
+| Queue / Trigger | Cloud Scheduler (cron tick) + Postgres poll loop (dispatch) |
 | Networking | VPC + VPC Access Connector (min 2 instances, always-on) |
-| Auth | PingOne/AIC JWKS + Google OIDC (internal) + Secret Manager |
+| Auth | PingOne/AIC JWKS (public API) + Google OIDC (internal) + Secret Manager (credentials) |
 | CI/CD | Artifact Registry + Cloud Build |
 
-**12+ services** to implement a loop that is conceptually: fire cron → create run row → dispatch to worker → execute ZIP → record result.
+---
+
+## Prior Review Resolution
+
+| Prior item | Status |
+|---|---|
+| P0 trust gate | **Fixed** — `approval` + `scan` set on upload in `JobDefinitionService.createDefinition()` |
+| P1 drop Elasticsearch | **Cannot do** — IGA constraint |
+| P2 VPC connector | **Open** — still the highest-value remaining simplification |
+| P3 dead code | **Fixed** — six files deleted (PRs #4, #8) |
+| P4 orphaned SA | **Fixed** — `worker_task_invoker` SA and IAM binding removed from Terraform |
+| P5 WORKER_RUNTIME_ISOLATION | **Fixed** — dead code path removed from executor |
+| P6 stale-RUNNING sweep | **Fixed** — `StaleRunSweeper` (PR #10) |
+| P7 dispatcher backpressure | **Fixed** — exponential backoff (PR #6) |
+| P8 worker service collapse | **Moot** — two-service boundary is correct given the ES constraint |
+| Worker startup validation | **Fixed** — `validateWorkerStartupConfig()` at worker entry (PR #14) |
+| P0 (review 3): pre-existing test failures | **Open** — 14 tests still failing on `master` |
+| P1 (review 3): ES readiness probe | **Open** |
+| P2 (review 3): VPC connector | **Open** |
+| P3 (review 3): RUNTIME_WORKER_URL in worker validation | **Open** |
+| P4 (review 3): StaleRunSweeper overlap guard | **Open** |
+| P5 (review 3): executor internal style | **Open** |
+| P6 (review 3): lazy ES client in WorkerRunService | **Open** |
+| P7 (review 3): bootstrap chicken-and-egg | **Open** |
 
 ---
 
 ## What Is Good
 
 ### Queue design
-Using `job_runs` as the queue directly (no pg-boss, no Cloud Tasks) is correct for this workload. `FOR UPDATE SKIP LOCKED` in the tick and conditional `UPDATE ... WHERE state='QUEUED'` in the dispatch poller are the right primitives. This avoids dual-write coordination between a job table and a run table, and removes a dependency that was deleted for good reason.
+`job_runs` is used directly as the queue. `FOR UPDATE SKIP LOCKED` in the tick and `UPDATE ... WHERE state='QUEUED'` in the dispatch poller are the right primitives. No pg-boss, no Cloud Tasks, no dual-write. The skip-locked pattern is correctly used and well-tested.
 
-### Security boundary between scheduler and worker
-Running user job code in a separate Cloud Run service is the right call. Even for internal code, keeping untrusted subprocess execution out of the scheduler process limits the blast radius of a misbehaving job (memory exhaustion, file descriptor leaks, runaway CPU). The OIDC-secured callback for completion and IGA proxying is the correct pattern.
+### Two-service security boundary
+User job code runs inside the worker Cloud Run service under a separate IAM identity (`runtime` SA). Untrusted subprocess execution is isolated from the scheduler process at the container boundary. The isolation guard (`WORKER_REQUIRE_RUNTIME_ISOLATION=false` explicitly required in `validateWorkerStartupConfig`) is enforced at startup.
 
-### Auth implementation
-The dual-mode `publicAuth.js` middleware — supporting both PingOne (`client_id` claim) and PingOne AIC / ForgeRock (`azp` claim) via OIDC discovery with JWKS caching — is well-structured and handles real-world IdP variation cleanly. Using `jose` for JWKS verification is the right library choice.
+### Three-plane auth design
+- **Public API:** PingOne JWKS with OIDC discovery, handles both `client_id` and `azp` claims for PingOne/AIC variants.
+- **Internal scheduler/worker:** Google OIDC bearer tokens, service-account email + audience checked.
+- **Runtime callbacks:** Same Google OIDC, but specifically the `RUNTIME_SERVICE_ACCOUNT_EMAIL` SA, not the invoker SA.
 
-### IAM is least-privilege
-The three service accounts (`scheduler_service`, `runtime`, `deployer`) have tight, well-reasoned permission sets. Each SA gets exactly what it needs and nothing more. The separation of the deployer SA from the runtime SAs is correct and the `iam.serviceAccountUser` grants are properly scoped.
+`productionValidation.js` enforces that `RUNTIME_SERVICE_ACCOUNT_EMAIL` differs from both invoker SAs — a meaningful runtime configuration safety check.
 
-### Run state machine
-`QUEUED → RUNNING → SUCCEEDED | FAILED | CANCELLING → CANCELLED` with per-instance savepoints in the tick is solid. The redrive path (new run ID with `:redrive:<uuid>` suffix) preserves the full history rather than mutating the original run, which is the right choice for an audit-oriented system.
+### Transactional tick with savepoints
+`SchedulerTickService` wraps the full batch in a single transaction but uses a savepoint per instance. A cron parse failure on one instance does not abort the rest. This is the correct resilience pattern for a batch scheduler.
+
+### Dispatcher backpressure
+Self-scheduling `setTimeout` with exponential backoff (`intervalMs × 2^(failures - threshold)`, capped at `maxBackoffMs`). Counter resets on any successful dispatch. No flood of log entries or token fetches during sustained worker outages.
+
+### Stale-RUNNING sweep
+`StaleRunSweeper` periodically queries `job_runs` for RUNNING rows older than the threshold, marks them FAILED with `STALE_RUNNING` error code. Per-run errors are isolated — one failure does not stop the sweep. Worker crashes no longer leave runs permanently stuck.
+
+### Artifact trust chain
+`createDefinition()` sets `approval: { status: "APPROVED", sha256, generation, approvedAt }` and `scan: { status: "CLEAN", sha256, scannedAt }` at upload time. Combined with SHA-256 hash verification and GCS generation pinning, every definition passes `validateArtifactTrust()` and artifact substitution is prevented.
+
+### IAM least-privilege
+Three service accounts (`scheduler_service`, `runtime`, `deployer`) with tightly scoped grants. The orphaned `worker_task_invoker` SA was removed from Terraform. The deployer SA has object-admin on the Terraform state bucket and the correct roles for `gcloud run deploy`.
 
 ### Token management
-`TokenManager` in `src/iga/tokenManager.js` single-flights concurrent refresh via a shared promise and handles the 60-second skew correctly. This avoids a thundering-herd token refresh under load.
+`TokenManager` single-flights concurrent token refresh via a shared promise, with a 60-second clock-skew buffer. No thundering-herd on expiry under load.
 
-### Test coverage
-48 test files covering all major components, including deep tests for `JobRuntimeExecutor`, `WorkerRunService`, and the public auth middleware. The use of Vitest with ESM is the right modern choice.
-
-### Zip artifact trust chain design
-The intent behind the artifact trust chain (SHA-256 integrity, GCS generation pinning, approval + scan status gates) is architecturally sound. Pinning to a GCS object generation prevents substitution attacks after approval. This is a mature security pattern.
-
-### Transactional tick with per-instance savepoints
-`SchedulerTickService` wraps the entire batch in one transaction but uses a savepoint per instance. A cron parse error on one instance does not abort the whole batch. This is the correct resilience pattern for a scheduler.
+### Test coverage breadth
+335 passing tests across 47 files. Core paths — `JobRuntimeExecutor`, `WorkerRunService`, `StaleRunSweeper`, `RunDispatcher`, production validation, and public auth middleware — all have meaningful unit coverage with dependency injection.
 
 ---
 
 ## What Needs Improvement
 
-### Split data stores add coordination risk without a clear payoff
+### VPC connector is unnecessary overhead
 
-Elasticsearch holds job definitions and audit events. Postgres holds instances and runs. This means two databases must be healthy for the system to operate, and writes that span both (definition upload) have a partial-failure window.
+`pgClient.js` uses `@google-cloud/cloud-sql-connector`, which authenticates through the Cloud SQL Admin API with short-lived mTLS certificates. It works equally well against a public IP Cloud SQL instance and does not require VPC routing. The VPC, subnet, Private Service Access peering, and VPC Access Connector (minimum 2 always-on instances, ~$50–100/month) serve no function not already provided by the connector library. Removing them simplifies the networking Terraform by four resources.
 
-**Definitions** are JSON config documents keyed by ID. The only queries are by ID and by state. Postgres JSONB handles this natively — you already constrain the shape with Zod on write, so ES's schema-free flexibility is not used. A `job_definitions` table with JSONB columns is a drop-in replacement.
+### Dual execution paths in `WorkerRunService` are hard to keep in sync
 
-**Audit events** are append-only structured logs. This is exactly what Cloud Logging is for. It is free at reasonable volumes, searchable in Log Explorer, retainable via log sinks to Cloud Storage or BigQuery, and natively integrated with GCP IAM audit trails.
+`WORKER_EXECUTION_MODE=isolated` is required in production. The `local` path is needed for development. Both paths share `WorkerRunService` but diverge in artifact download order, isolation gate, concurrency tracking (`this.localRunning`), and audit event structure. This is approximately 200 lines of service code that must track the production path but is never exercised in production. The local path should be retained for the dev loop, but the divergence should be documented and ideally behind a clear abstraction to prevent silent drift.
 
-Dropping ES removes: the ES client, the ES API key secret, dual-write in `JobDefinitionService`, the ES health dependency on every dispatch (definition fetch before trust validation), and the partial-write cleanup code.
+### `validateWorkerStartupConfig` requires a variable the worker doesn't use
 
-### VPC connector may be unnecessary
+`RUNTIME_WORKER_URL` is in the worker's required startup set but is the URL the scheduler uses to reach the worker — the worker process itself never references it. The worker won't start in any environment where this variable is absent, even though it has zero effect on worker behavior. Remove it from `validateWorkerStartupConfig`; it belongs only in `validateProductionStartupConfig`.
 
-The VPC connector (min 2 always-on instances) exists for Cloud SQL private IP access. However, `pgClient.js` already uses `@google-cloud/cloud-sql-connector`, which connects via the Cloud SQL Admin API and does not route through your VPC. It works with a public IP instance and IAM authentication, with SSL enforced by the connector.
+### `StaleRunSweeper._sweep()` has no overlap guard
 
-If Cloud SQL is moved to public IP + IAM auth + connector library, the entire VPC setup can be removed: the custom VPC, the subnet, the Private Service Access allocation, and the VPC Access Connector. These are four Terraform resources with ongoing cost and operational complexity.
+`RunDispatcher._pass()` uses a `_running` flag to prevent concurrent invocations. `StaleRunSweeper._sweep()` does not. Under PG pool saturation, a sweep can outlast its interval and produce two concurrent sweeps. The `markFailed` call is idempotent (guarded by `WHERE state = 'RUNNING'`), so this is safe in practice, but the inconsistency is worth resolving.
 
-The connector library provides equivalent security (IAM-authenticated, short-lived mTLS certificates) without the network plumbing.
+### `jobRuntimeExecutor.js` internal methods are minified one-liners
 
-### Dual execution paths (`local` vs `isolated`) in WorkerRunService
+The constructor and public interface are readable. Internal methods including `_spawnEntrypoint` (child process lifecycle, timeout, stdout/stderr capture, force-kill), `parseResult`, `validateExecuteRequest`, and `writeContextFile` are single-line dense code. `_spawnEntrypoint` in particular is the highest-risk method in the codebase — it manages async state across multiple event listeners — and should be as readable as possible for review and debugging.
 
-Production enforces `WORKER_EXECUTION_MODE=isolated` via `productionValidation.js`. The `local` path (in-process subprocess within the scheduler) exists only for development and testing. It adds approximately 200 lines across `WorkerRunService` and `JobRuntimeExecutor` that must be maintained in parallel with the production path, and it creates subtle asymmetries — for example, the artifact download and integrity check sequence differs between the two modes.
+### Bootstrap chicken-and-egg problem on fresh deploy
 
-Consider moving the `local` path behind a clearer abstraction or extracting it to a test-only helper, so the production code path is unambiguous.
+The worker Cloud Run service URL is unknown until after `terraform apply`. The scheduler's `WorkerServiceRuntimeLauncher` and the deploy script both need it. This requires a manual two-phase deploy process on first rollout, which is documented but operationally fragile. Feeding the worker URL Terraform output into Cloud Build substitutions would close this gap.
 
-### Dispatch poller has no backpressure
+### `schedule.js` error message references a development phase
 
-`RunDispatcher` polls every 5 seconds and attempts to dispatch all queued runs. If the worker service is unhealthy or rate-limiting, each poll pass will log a warning and retry all queued runs on the next tick. There is no exponential backoff, no per-run failure counting at the dispatcher level, and no circuit-breaker pattern.
+`src/utils/schedule.js` line 5: `throw new Error("Only cron schedules are supported in Phase 4")`. This stale development-phase label is in production code and will appear in user-facing error responses if a non-cron schedule type is submitted.
 
-Under a sustained worker outage, this produces continuous noise in logs and unnecessary OIDC token fetches. A simple per-run failure counter with exponential delay, or a circuit-breaker that pauses dispatch after N consecutive failures, would reduce churn significantly.
+### `jobDefinitionSchema.js` `timeoutSeconds` maximum silently disagrees with the executor
 
-### No stale-RUNNING sweep
+The Zod schema allows `timeoutSeconds` up to 3600 seconds. `JobRuntimeExecutor.DEFAULT_MAX_TIMEOUT_SECONDS` is 1800. A definition that declares `timeoutSeconds: 3600` will pass schema validation, be stored in Elasticsearch, and be silently capped at 1800 at execution time. The schema max should match the executor cap, or the cap should be surfaced as a validation error at definition-creation time.
 
-A Cloud Run worker instance that crashes without calling `/complete` leaves its run in `RUNNING` state forever. This is acknowledged in the plan index as a known gap. It is not a regression from the prior architecture, but it is a real operational problem: a stale run blocks retry and manual intervention is required. A background sweep that marks RUNNING runs older than `timeout + grace` as FAILED is a small addition with high operational value.
+### No pagination on run history
 
-### Worker service bootstrap chicken-and-egg problem
-
-On a fresh deployment, the worker Cloud Run service URL is unknown until after `terraform apply`. The scheduler's `WorkerServiceRuntimeLauncher` needs that URL at startup. This is documented but means the first deploy requires a manual two-phase process. A Terraform output feeding a Cloud Build substitution would close this gap.
+`GET /runs?instanceId=...` is capped at 200 results with no cursor or offset. Instances with long histories silently return a truncated result set.
 
 ---
 
 ## What Is Bad
 
-### The trust gate always rejects — every run fails in production
+### `cloudbuild.yaml` has three production deployment bugs
 
-`WorkerRunService.validateArtifactTrust()` requires `jobZip.approval.status === 'APPROVED'` and `jobZip.scan.status === 'CLEAN'`. `JobDefinitionService.createDefinition()` never sets these fields. No definition uploaded through the API will ever pass the trust gate. Every dispatched run fails at this check.
+**Bug 1 — worker deploys with `WORKER_EXECUTION_MODE=local` (line 125).** The worker service is an HTTP server that accepts `/execute` requests and runs job subprocesses. `WORKER_EXECUTION_MODE` is not a variable the worker process reads — it is the scheduler's variable for controlling how it dispatches. Passing it to the worker is harmless for the worker, but it signals the script was written under a misunderstanding of which service reads which variable. More importantly, this is the canonical deploy script that operators will follow.
 
-This means no job has ever successfully executed through the normal path in production unless an operator manually patched the Elasticsearch definition document to add `approval` and `scan` fields. This is a P0 correctness defect, not a design gap. It needs to be resolved before the system is usable: either auto-set `approval.status = 'APPROVED'` and `scan.status = 'CLEAN'` on upload for trusted internal code, or build and wire the actual approval and scanning pipeline.
+**Bug 2 — scheduler deploy reads a deleted Terraform output (line 139).** `WORKER_INVOKER_SA=$$(jq -r '.worker_task_invoker_email.value' "$$OUT")` reads `worker_task_invoker_email` from the Terraform output JSON. That output was deleted when the `worker_task_invoker` SA was removed. `jq` will return the string `"null"`, and the deploy will set `WORKER_INVOKER_SERVICE_ACCOUNT_EMAIL=null` on the scheduler Cloud Run service. The scheduler's `productionValidation.js` checks this variable is non-empty, so the scheduler will fail to start after every Cloud Build deploy. This is a live production-breaking bug on the next deploy.
 
-### Orphaned infrastructure from the Cloud Tasks deletion
+**Bug 3 — worker deploy omits `WORKER_REQUIRE_RUNTIME_ISOLATION=false`.** `validateWorkerStartupConfig()` requires this variable to be explicitly set to `"false"`. The Terraform `worker_service.tf` sets it correctly. But `cloudbuild.yaml`'s `--set-env-vars` fully replaces the Cloud Run env (it does not merge), so the variable set by Terraform is wiped on every Cloud Build deploy. The worker will fail `validateWorkerStartupConfig` and refuse to start until an operator manually re-sets the env var. This is a production-breaking bug on every Cloud Build deploy.
 
-`terraform/scheduler.tf` creates `google_service_account.worker_task_invoker` with the description "Used in Cloud Tasks OIDC tokens when invoking the internal worker route." Cloud Tasks was deleted in Plan 4. This SA has `run.invoker` IAM bindings but no corresponding queue or use in the codebase. It is ghost infrastructure: it has no operational purpose, incurs no meaningful cost, but signals that the Terraform state is not clean and will confuse anyone reading the infra in the future.
+### `workerApp.js` drops execution failures silently
 
-### `WORKER_RUNTIME_ISOLATION` env var is partially removed
+When `executor.execute()` fails (line 57), the error is logged to `console.error` and the promise resolves. The scheduler service already transitioned the run to RUNNING before dispatching. The worker never calls `/complete` (there is no completion callback in `workerApp.js`). The run stays RUNNING until the stale sweeper marks it FAILED after the full threshold (default 31 minutes). Any job execution failure in the worker — timeout, non-zero exit, zip extraction error — produces a 31-minute silent delay before the failure is recorded. The worker should call the `/complete` callback with a failure payload when `executor.execute()` rejects.
 
-`src/config/productionValidation.js` throws if `WORKER_RUNTIME_ISOLATION` is set, because it was the old gVisor isolation flag replaced by `WORKER_EXECUTION_MODE`. However, `src/services/jobRuntimeExecutor.js` still reads `WORKER_RUNTIME_ISOLATION` in its constructor and uses it to gate gVisor invocation. The result is a dead code path in the executor that references a variable that production explicitly rejects. It will silently never activate but adds confusion about which env var controls what. The old flag and its handling in `jobRuntimeExecutor.js` should be removed.
+### ES readiness is invisible to the health endpoint
 
-### Dead code inventory is significant
+Every dispatch goes through `WorkerRunService.buildExecutionMetadata()`, which calls `esClient.get()` to fetch the job definition from Elasticsearch. If ES is down, every dispatch fails. The scheduler's `/health` and `/ready` endpoints return `{ status: "ok" }` regardless of ES connectivity. An operator watching the health endpoint will see green while all runs are silently failing. ES should be probed in the readiness check, and ES-down vs worker-down should be distinguishable in logs (they currently produce the same dispatcher backoff behavior).
 
-The following files are preserved by plan invariant but serve no operational purpose and should be deleted once the invariant is lifted:
+### `workerRunService.js` initializes the ES client eagerly in the constructor default
 
-| File | Why it is dead |
-|---|---|
-| `src/services/isolatedRuntimeLauncher.js` | Replaced by `WorkerServiceRuntimeLauncher`; was the Cloud Run Jobs path |
-| `src/workers/internalWorkerPlaceholder.js` | Placeholder with no logic |
-| `src/middleware/cloudSchedulerInvocation.js` | Superseded by `internalAuth.js` |
-| `routes/` (root level) | Orphaned pre-migration route files |
-| `bin/www` | Leftover Express scaffold |
-| `public/` | Leftover Express scaffold |
+`constructor({ esClient = createEsClient(), ... })` — the default parameter fires `createEsClient()` at class instantiation time, which reads `ES_ENDPOINT`/`ES_API_KEY` from the environment. Any code path that constructs `WorkerRunService` without injecting a mock will trigger real ES client initialization. In tests this is silent; in environments without `ES_ENDPOINT` set it throws at construction. The `definitionsIndex` getter already uses lazy initialization; the ES client should follow the same pattern.
 
-Keeping dead code increases the cognitive load of every future reader and creates maintenance surface. The plan invariant that preserves them was appropriate during migration; it is not appropriate as permanent policy.
+### `cloudbuild.yaml` scheduler deploy reads `SCHEDULER_OIDC_AUDIENCE=${_SERVICE_URL}` but the audience is the scheduler URL, not the worker URL
 
----
+Both `WORKER_OIDC_AUDIENCE` and `SCHEDULER_OIDC_AUDIENCE` are set to `${_SERVICE_URL}`, which is the scheduler's Cloud Run service URL. `WORKER_OIDC_AUDIENCE` should be the worker service URL (the audience the worker's OIDC verifier checks), not the scheduler URL. With both set to the same value, a OIDC token minted for the scheduler can be replayed against the worker's internal routes, breaking the intended SA-per-route isolation.
 
-## Proposed Simplified Architecture
+### Python jobs receive no broker URL — IGA API calls will fail
 
-The same functionality with fewer services:
+`jobRuntimeExecutor.executePythonEntrypoint()` (line 199) checks `process.env.IGA_BROKER_URL` to inject the broker URL into the child process env. But `IGA_BROKER_URL` is never set in the parent process — only `RUNTIME_BROKER_URL` is. The Node job path at line 177 correctly maps `RUNTIME_BROKER_URL → IGA_BROKER_URL`. The Python path uses the wrong source variable and will always inject nothing. Every Python job that calls the IGA API through the broker will fail with a missing broker URL.
 
-```
-PingOne OAuth ──► Cloud Run (single service: API + tick handler + dispatch poller + job executor)
-                      │
-                      ├── Postgres (definitions + instances + runs + JSONB for flexible config)
-                      ├── GCS (ZIP artifacts)
-                      ├── Secret Manager (credentials only)
-                      └── Cloud Logging (audit events, structured JSON)
-                              ▲
-                   Cloud Scheduler (POST /internal/scheduler/tick every minute)
-```
+### `CANCELLING` runs are never swept
 
-**Services: 6 instead of 12+.** Same functional capability.
-
-| Removed | Justification |
-|---|---|
-| Elasticsearch | Definitions → Postgres JSONB; audit → Cloud Logging |
-| Worker Cloud Run service | Process isolation sufficient for internal trusted code |
-| VPC + VPC Access Connector | Cloud SQL connector library does not require VPC routing |
-| Worker Dockerfile + Artifact Registry entries | Follows from worker service removal |
-| OIDC dispatch flow (scheduler → worker) | Follows from worker service removal |
-
-The only capability trade-off is process isolation vs container isolation for job execution. If job code comes from external or untrusted authors, retain the separate worker service. If jobs are written by your own teams, process isolation (the `local` execution path, hardened) is sufficient and the operational cost of the two-service architecture is not justified.
+`StaleRunSweeper.listStaleRunningIds()` queries only `WHERE state = 'RUNNING'`. When a RUNNING job is cancelled, it transitions to CANCELLING via `RunControlService.cancelRun()`, which then calls `cancelRuntimeExecution()`. In the production path, `WorkerServiceRuntimeLauncher.cancel()` returns `{ status: "unsupported" }` — the Cloud Run container cannot be remotely terminated. The run sits in CANCELLING indefinitely unless the worker eventually calls `/complete`. There is no sweep, no timeout, and no operator-visible indication beyond the CANCELLING state. Runs cancelled while RUNNING will never resolve without manual database intervention.
 
 ---
 
@@ -160,12 +163,19 @@ The only capability trade-off is process isolation vs container isolation for jo
 
 | Priority | Action | Impact | Effort |
 |---|---|---|---|
-| P0 | Fix trust gate — auto-approve on upload or wire the approval pipeline | Production correctness: no runs complete without this | Hours |
-| P1 | Drop Elasticsearch — definitions to Postgres JSONB, audit to Cloud Logging | Removes second DB, eliminates dual-write risk, reduces cost | Days |
-| P2 | Remove VPC connector — Cloud SQL public IP + connector lib + IAM auth | Removes always-on connector cost and VPC complexity | Day |
-| P3 | Delete dead code — isolated launcher, placeholder, old middleware, routes, bin, public | Reduces maintenance surface and cognitive load | Hours |
-| P4 | Delete orphaned `worker_task_invoker` SA from Terraform | Clean infra state | Minutes |
-| P5 | Remove `WORKER_RUNTIME_ISOLATION` from `jobRuntimeExecutor.js` | Remove dead code path and confusion with the rejected env var | Minutes |
-| P6 | Add stale-RUNNING sweep — mark RUNNING runs older than timeout+grace as FAILED | Operational reliability: no stuck runs requiring manual intervention | Hours |
-| P7 | Add dispatcher backpressure — circuit-breaker or exponential backoff on repeated worker failures | Reduce log noise and unnecessary token fetches under worker outage | Hours |
-| P8 | Evaluate worker service collapse — if job code is internal and trusted, collapse worker into scheduler | Removes two-service complexity, OIDC dispatch, bootstrap problem | Days |
+| P0 | Fix `cloudbuild.yaml` Bug 2 — replace `worker_task_invoker_email` output reference with the correct `scheduler_tick_invoker_email` or a dedicated invoker variable | Production: scheduler will not start after next Cloud Build deploy | Minutes |
+| P0 | Fix `cloudbuild.yaml` Bug 3 — add `WORKER_REQUIRE_RUNTIME_ISOLATION=false` to worker `--set-env-vars` | Production: worker will not start after next Cloud Build deploy | Minutes |
+| P0 | Fix `cloudbuild.yaml` audience bug — set `WORKER_OIDC_AUDIENCE` to the worker service URL, not the scheduler URL | Security: prevents OIDC token replay across services | Minutes |
+| P0 | Fix Python broker URL — change `process.env.IGA_BROKER_URL` to `process.env.RUNTIME_BROKER_URL` in `executePythonEntrypoint()` | Correctness: all Python jobs that call the IGA API are currently broken | Minutes |
+| P1 | Fix worker silent failure — have `workerApp.js` call `/complete` (via `RUNTIME_BROKER_URL`) with a failure payload when `executor.execute()` rejects | Operational: reduces failure visibility delay from 31 minutes to seconds | Hours |
+| P1 | Fix CANCELLING stuck state — extend `StaleRunSweeper` to also sweep CANCELLING runs older than threshold | Operational: cancelled RUNNING jobs are currently permanent without manual DB intervention | Hours |
+| P2 | Fix pre-existing test failures — triage and resolve 14 failing tests on `master` | Restore unambiguous green test signal | Hours |
+| P3 | Add ES readiness probe — include ES connectivity in `/health` and `/ready` | Operational: ES outage becomes visible in monitoring before all runs fail | Hours |
+| P4 | Remove VPC connector — move Cloud SQL to public IP + IAM auth (connector library already handles this) | Cost and complexity: removes ~$50–100/month and four Terraform resources | Day |
+| P5 | Remove `RUNTIME_WORKER_URL` from `validateWorkerStartupConfig` required list | Correctness: worker should not fail to start because of a scheduler-only variable | Minutes |
+| P6 | Fix `timeoutSeconds` schema max — align `jobDefinitionSchema.js` max (3600) with executor cap (1800) | Correctness: silent truncation at execution time | Minutes |
+| P7 | Fix `schedule.js` error message — remove "Phase 4" reference | Code quality: stale dev language in a user-facing error message | Minutes |
+| P8 | Lazy-initialize ES client in `WorkerRunService` constructor | Code quality: decouples construction from environment availability | Minutes |
+| P9 | Add `_running` overlap guard to `StaleRunSweeper._sweep()` | Correctness: prevent redundant concurrent sweeps under PG saturation | Minutes |
+| P10 | Reformat `jobRuntimeExecutor.js` internal methods — expand minified one-liners | Maintainability: highest-risk methods in the codebase should be readable | Hours |
+| P11 | Resolve bootstrap chicken-and-egg — feed worker URL Terraform output into Cloud Build substitutions | Operational: removes manual two-phase deploy requirement | Hours |

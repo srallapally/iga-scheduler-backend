@@ -69,9 +69,12 @@ export class RunStore {
   }
 
   async transition({ runId, fromStates, set }) {
-    const setCols = Object.keys(set);
+    // updatedAt is always written via now() in the query — exclude it from the
+    // SET clause to avoid "column specified more than once" errors.
+    const { updatedAt: _omit, ...rest } = set;
+    const setCols = Object.keys(rest);
     const setClause = setCols.map((col, i) => `${camel2snake(col)} = $${i + 3}`).join(", ");
-    const vals = [runId, fromStates, ...setCols.map((c) => set[c])];
+    const vals = [runId, fromStates, ...setCols.map((c) => rest[c])];
     const { rows } = await this.pool.query(
       `UPDATE job_runs SET ${setClause}, updated_at = now()
        WHERE run_id = $1 AND state = ANY($2)

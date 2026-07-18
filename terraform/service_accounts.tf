@@ -115,11 +115,24 @@ resource "google_storage_bucket_iam_member" "runtime_gcs_read" {
 # (the scheduler service's /internal/runtime/iga/request and /complete endpoints).
 # Cloud Run to Cloud Run over HTTPS — only roles/run.invoker is needed.
 resource "google_cloud_run_service_iam_member" "runtime_invoker" {
+  count    = var.scheduler_service_exists ? 1 : 0
   project  = var.project_id
   location = var.region
   service  = var.cloud_run_service_name
   role     = "roles/run.invoker"
   member   = "serviceAccount:${google_service_account.runtime.email}"
+}
+
+# Public API access — allow unauthenticated requests to reach the scheduler service.
+# Auth is enforced in-app by the PingOne JWT middleware; Cloud Run itself must not
+# block requests before they reach the app.
+resource "google_cloud_run_service_iam_member" "scheduler_service_public_invoker" {
+  count    = var.scheduler_service_exists ? 1 : 0
+  project  = var.project_id
+  location = var.region
+  service  = var.cloud_run_service_name
+  role     = "roles/run.invoker"
+  member   = "allUsers"
 }
 
 # ── deployer: push images, deploy Cloud Run resources, act-as runtime SA ──────

@@ -1,4 +1,5 @@
 import crypto from "crypto";
+import path from "path";
 import express from "express";
 import { createJobDefinitionRouter } from "./routes/jobDefinitions.js";
 import { createJobInstanceCollectionRouter, createJobInstanceRouter } from "./routes/jobInstances.js";
@@ -45,6 +46,12 @@ export function createApp({ workerRunService, runStore, esClient, jobInstanceSer
   app.use("/job-instances", publicAuth, createJobInstanceRouter({ ...instanceOpts, ...runOpts }));
   app.use("/job-instances", publicAuth, createInstanceRunRouter(runOpts));
   app.use("/job-runs", publicAuth, createJobRunRouter(runOpts));
+
+  if (process.env.UI_DIST_PATH) {
+    app.use(express.static(process.env.UI_DIST_PATH));
+    app.get("*", (_req, res) => res.sendFile(path.join(process.env.UI_DIST_PATH, "index.html")));
+  }
+
   app.use(globalErrorHandler);
 
   return app;

@@ -54,8 +54,14 @@ resource "google_cloud_run_v2_service" "worker" {
     }
   }
 
+  deletion_protection = var.worker_service_deletion_protection
+
   lifecycle {
-    ignore_changes = [template[0].containers[0].image]
+    # Cloud Build owns the full template after first deploy: image, env vars,
+    # VPC connector annotations, secrets, labels. Ignoring the entire template
+    # prevents Terraform from creating a new revision that reverts to the
+    # placeholder image whenever other template-level drift is detected.
+    ignore_changes = [template]
   }
 
   depends_on = [google_project_service.run]

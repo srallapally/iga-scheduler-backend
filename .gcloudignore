@@ -13,8 +13,15 @@ build/
 .env.*
 !.env.example
 
-# Infrastructure/docs not needed by Cloud Run runtime
-terraform/
+# Terraform internals — never upload state or local secrets
+terraform/.terraform/
+terraform/.terraform.lock.hcl
+terraform/*.tfstate
+terraform/*.tfstate.*
+terraform/*.tfvars
+terraform/*.tfvars.json
+
+# Docs not needed by Cloud Build
 docs/
 
 # Editor/OS noise

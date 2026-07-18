@@ -148,9 +148,27 @@ variable "db_user" {
   default = "iga_scheduler_app"
 }
 
+variable "scheduler_service_exists" {
+  description = "Set to true once the iga-scheduler Cloud Run service has been deployed by Cloud Build. Controls whether the scheduler_tick_invoker and runtime_invoker IAM members are created — they will error if the service does not yet exist."
+  type        = bool
+  default     = false
+}
+
 variable "db_deletion_protection" {
   type    = bool
   default = true
+}
+
+variable "worker_service_deletion_protection" {
+  description = "Set to false before running terraform destroy to allow the worker Cloud Run service to be deleted."
+  type        = bool
+  default     = true
+}
+
+variable "storage_force_destroy" {
+  description = "Set to true before running terraform destroy to allow the job-zip bucket to be deleted even when it contains objects."
+  type        = bool
+  default     = false
 }
 
 variable "tf_state_bucket_name" {

@@ -17,6 +17,7 @@ resource "google_service_account" "scheduler_tick_invoker" {
 }
 
 resource "google_cloud_run_service_iam_member" "scheduler_tick_invoker" {
+  count    = var.scheduler_service_exists ? 1 : 0
   project  = var.project_id
   location = var.region
   service  = var.cloud_run_service_name
@@ -62,6 +63,6 @@ resource "google_cloud_scheduler_job" "scheduler_tick" {
 
   depends_on = [
     google_project_service.cloud_scheduler,
-    google_cloud_run_service_iam_member.scheduler_tick_invoker
+    google_cloud_run_service_iam_member.scheduler_tick_invoker[0]
   ]
 }

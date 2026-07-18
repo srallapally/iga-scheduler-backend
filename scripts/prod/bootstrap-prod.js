@@ -34,6 +34,8 @@ applyCliDefaults();
 const args = process.argv.slice(2);
 const DRY_RUN = args.includes("--dry-run");
 const SKIP_PREFLIGHT = args.includes("--skip-preflight");
+const ES_ONLY = args.includes("--es-only");
+const PG_ONLY = args.includes("--pg-only");
 
 let stepFailures = 0;
 function pass(s, m) { ok(s, m); }
@@ -72,7 +74,8 @@ const seeded = {
 };
 
 // 2a. Elasticsearch indices
-{
+if (PG_ONLY) { dim("  [--pg-only] skipping ES indices"); }
+if (!PG_ONLY) {
   const hasEsCreds = Boolean(process.env.ES_ENDPOINT && process.env.ES_API_KEY);
   const { getSchedulerIndexDefinitions } = await import("../../src/elasticsearch/schedulerIndexMappings.js");
   const indices = getSchedulerIndexDefinitions();
@@ -102,7 +105,8 @@ const seeded = {
 }
 
 // 2b. Postgres migrations
-{
+if (ES_ONLY) { dim("  [--es-only] skipping PG migrations"); }
+if (!ES_ONLY) {
   const elapsed = stopwatch();
   const dbEngine = process.env.DB_ENGINE || "direct";
   const hasPgConfig = dbEngine === "cloud-sql"
@@ -240,7 +244,9 @@ function vfail(s, m) { fail(s, m); validationFailures++; }
     ? Boolean(process.env.DB_INSTANCE_CONNECTION_NAME && process.env.DB_USER && process.env.DB_NAME)
     : Boolean(process.env.DATABASE_URL);
 
-  if (!hasPgConfig) {
+  if (ES_ONLY) {
+    warn("pg", "skipped — --es-only mode (Cloud SQL not reachable from local network)");
+  } else if (!hasPgConfig) {
     warn("pg", "skipped — no PG config");
   } else {
     const { createPgPool } = await import("../../src/clients/pgClient.js");

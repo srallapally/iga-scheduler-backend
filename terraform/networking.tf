@@ -10,10 +10,17 @@ resource "google_project_service" "vpcaccess" {
   disable_on_destroy = false
 }
 
+resource "google_project_service" "compute" {
+  project            = var.project_id
+  service            = "compute.googleapis.com"
+  disable_on_destroy = false
+}
+
 resource "google_compute_network" "main" {
   project                 = var.project_id
   name                    = var.vpc_name
   auto_create_subnetworks = false
+  depends_on              = [google_project_service.compute]
 }
 
 resource "google_compute_subnetwork" "connector" {

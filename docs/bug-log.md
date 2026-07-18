@@ -26,7 +26,7 @@ Priority legend:
 | AVL-2 | P1 | ES on the dispatch hot path; ES blip permanently fails in-flight dispatches | Availability | Verified | **Resolved** — this PR, ADR 0016. COR-4 (dead retry-classification machinery) remains a separate, unaddressed gap |
 | AVL-3 | P1 | Scheduler service lacks always-on CPU; dispatch/sweep loops stall to tick cadence | Availability | Verified | **Resolved** — this PR, ADR 0011 |
 | CIP-1 | P1 | CI runs no tests | CI / process | Verified | **Resolved** — this PR, ADR 0010. CIP-2 (hermetic PG-backed CI so the 28 skipped tests run) remains a separate follow-on |
-| SEC-5 | P2 | `publicAuth` trusts JWT-header `alg`, nullifying algorithm allowlist | Security / defense-in-depth | By inspection | Open |
+| SEC-5 | P2 | `publicAuth` trusts JWT-header `alg`, nullifying algorithm allowlist | Security / defense-in-depth | By inspection | **Resolved** — this PR, ADR 0020 |
 | COR-4 | P2 | No automatic retry despite full retry-classification machinery | Correctness | By inspection | Open |
 | COR-5 | P2 | Stale sweeper keys off `started_at`, not `heartbeat_at`; hard job ceiling | Correctness | By inspection | Open |
 | COR-6 | P2 | Misfire policy replays every missed occurrence after an outage | Correctness | By inspection | Open |
@@ -129,10 +129,11 @@ Priority legend:
 
 ## P2
 
-### SEC-5 — `publicAuth` trusts JWT-header `alg`
+### SEC-5 — `publicAuth` trusts JWT-header `alg` — **Resolved**
 **Where:** `src/middleware/publicAuth.js` (`algorithms:[alg]` read from `decodeProtectedHeader`).
 **What:** Not practically exploitable via jose + remote JWKS (asymmetric keys only, `none` rejected), but it nullifies the allowlist as defense-in-depth.
 **Fix:** Pin expected algorithms (e.g. `["RS256","ES256"]`).
+**Resolution:** `createJoseVerifier` now takes a fixed `algorithms` parameter (default `["RS256", "ES256", "PS256"]`) and passes it directly to `jwtVerify`, instead of reading `alg` back out of the token's own header. The default had to include `PS256`, not just the bug report's illustrative `RS256`/`ES256` example — this codebase's PingOne AIC (ForgeRock) integration signs with PS256, confirmed by an existing test, so a narrower default would have regressed real AIC deployments while fixing the security gap. `createPublicAuthMiddleware` threads an `algorithms` option through, defaulting from a new optional `PUBLIC_API_ALGORITHMS` env var (comma-separated) — unset for both PingOne and AIC callers today, since both already fall inside the built-in default. See `docs/adr/0020-jwt-algorithm-allowlist.md`.
 
 ### COR-4 — No automatic retry
 **Where:** `retryClassifier` computes `retryable`, recorded and audited; nothing requeues.

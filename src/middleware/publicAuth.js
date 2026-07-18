@@ -1,16 +1,17 @@
-import { createRemoteJWKSet, jwtVerify, decodeProtectedHeader } from "jose";
+import { createRemoteJWKSet, jwtVerify } from "jose";
 
 export function createPublicAuthMiddleware({
   issuer = process.env.PUBLIC_API_ISSUER,
   audience = process.env.PUBLIC_API_AUDIENCE,
   requiredScope = process.env.PUBLIC_API_REQUIRED_SCOPE,
   jwksUrl = process.env.PUBLIC_API_JWKS_URL,
+  algorithms = process.env.PUBLIC_API_ALGORITHMS?.split(",").map((a) => a.trim()),
   verifyToken
 } = {}) {
   if (!issuer) throw new Error("PUBLIC_API_ISSUER is required");
   if (!audience) throw new Error("PUBLIC_API_AUDIENCE is required");
 
-  const resolvedVerifyToken = verifyToken || createJoseVerifier({ issuer, audience, jwksUrl });
+  const resolvedVerifyToken = verifyToken || createJoseVerifier({ issuer, audience, jwksUrl, algorithms });
 
   return async function publicAuth(req, res, next) {
     try {
@@ -66,7 +67,7 @@ export async function resolveJwksUrl(issuer) {
   return `${issuer}/.well-known/jwks.json`;
 }
 
-export function createJoseVerifier({ issuer, audience, jwksUrl }) {
+export function createJoseVerifier({ issuer, audience, jwksUrl, algorithms = ["RS256", "ES256", "PS256"] }) {
   // When jwksUrl is explicit, initialise the JWKS set immediately (sync, preserves prior behaviour).
   // When it is absent, defer to OIDC discovery on the first token verification so that
   // PingOne AIC realm URLs (which publish jwks_uri in their discovery doc) work without
@@ -84,10 +85,11 @@ export function createJoseVerifier({ issuer, audience, jwksUrl }) {
 
   return async function verifyJoseToken(token) {
     const JWKS = await getJwks();
-    // Read the algorithm from the JWT header so we accept whatever the AS
-    // signs with (RS256, PS256, ES256, etc.) without hard-coding a value.
-    const { alg } = decodeProtectedHeader(token);
-    const { payload } = await jwtVerify(token, JWKS, { issuer, audience, algorithms: [alg] });
+    // Fixed allowlist, independent of what the token's own header claims
+    // (SEC-5) -- reading `alg` back out of the header being verified made
+    // the allowlist a tautology. PS256 is a default, not an afterthought:
+    // PingOne AIC (ForgeRock) signs with it, unlike PingOne's RS256.
+    const { payload } = await jwtVerify(token, JWKS, { issuer, audience, algorithms });
     return payload;
   };
 }

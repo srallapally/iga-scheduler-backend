@@ -22,6 +22,8 @@ Supports **JavaScript (Node 22)** and **Python (3.11 / 3.12)** job runtimes.
 
 The decision comes down to: the scheduling core already works, and SEC-1 + SEC-7 together require run state to live in our own database anyway. Revisit if runs ever need to survive worker loss or resume mid-flight (COR-4/COR-5) — the path then is Temporal Cloud, one namespace per customer. Full analysis: `docs/adr/0024-build-vs-foss-rationale.md`.
 
+For more details, see `docs/build-vs-buy.md`.
+
 ## Modes
 
 | Mode | Command | Storage | Use |

@@ -1,7 +1,5 @@
-# ADR 0024: Build vs. FOSS Workflow Engine
+# Build vs. Buy
 
-**Status:** Accepted
-**Deciders:** srallapally
 **Date:** 2026-07-18
 
 ---

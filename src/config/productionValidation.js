@@ -4,7 +4,17 @@ export function validateWorkerStartupConfig({ env = process.env } = {}) {
   const required = [
     "GCP_PROJECT_ID",
     "RUNTIME_SERVICE_ACCOUNT_EMAIL",
-    "RUNTIME_BROKER_URL"
+    "RUNTIME_BROKER_URL",
+    // WorkerRunService now runs in this process (AVL-1 residual, pull
+    // worker) and its esClient/definitionsIndex getters lazily call
+    // getConfig(), which requires all four of these -- needed for
+    // buildExecutionMetadata's fallback when a run has no AVL-2
+    // execution_metadata snapshot. Required here so a missing config fails
+    // at startup, not the first time that rare fallback is hit
+    // mid-execution.
+    "JOB_ZIP_BUCKET",
+    "ES_ENDPOINT",
+    "ES_API_KEY"
   ];
 
   const missing = required.filter((name) => !env[name]);
@@ -25,12 +35,17 @@ export function validateProductionStartupConfig({ env = process.env } = {}) {
     "JOB_ZIP_BUCKET",
     "ES_ENDPOINT",
     "ES_API_KEY",
+    // WORKER_OIDC_AUDIENCE/WORKER_INVOKER_SERVICE_ACCOUNT_EMAIL are NOT
+    // about the removed scheduler->worker HTTP push (AVL-1 residual) --
+    // they gate createInternalAuthMiddleware's defaults for the
+    // scheduler's own /internal/job-runs/* retry/cancel/redrive routes
+    // (internalWorker.js), which construct their auth middleware eagerly
+    // and throw at startup if these are unset. Still required.
     "WORKER_OIDC_AUDIENCE",
     "WORKER_INVOKER_SERVICE_ACCOUNT_EMAIL",
     "SCHEDULER_OIDC_AUDIENCE",
     "SCHEDULER_INVOKER_SERVICE_ACCOUNT_EMAIL",
     "WORKER_EXECUTION_MODE",
-    "RUNTIME_WORKER_URL",
     "RUNTIME_SERVICE_ACCOUNT_EMAIL",
     "RUNTIME_BROKER_URL",
     "IGA_TOKEN_ENDPOINT",

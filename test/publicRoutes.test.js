@@ -46,7 +46,6 @@ function createTestApp(overrides = {}) {
       verifyToken: vi.fn(async () => makeValidToken()),
       ...overrides
     },
-    workerRunService: { executeRun: vi.fn() },
     jobDefinitionService: mockDefinitionService(),
     jobInstanceService: mockInstanceService(),
     runStore: mockRunStore(),

@@ -101,6 +101,49 @@ describe.skipIf(!pgAvailable())("RunStore integration", () => {
     expect(losses[0].missing).toBeUndefined();
   });
 
+  describe("claimNextQueued (AVL-1 residual — pull-worker batch claim)", () => {
+    it("returns [] when the QUEUED backlog is empty", async () => {
+      const claimed = await store.claimNextQueued({ limit: 10, startedAt: "2026-06-04T10:05:00.000Z" });
+      expect(claimed).toEqual([]);
+    });
+
+    it("claims up to limit QUEUED runs atomically, each with a distinct dispatch_id", async () => {
+      await store.createRun(makeRun({ runId: "run-batch-a", createdAt: "2026-06-04T10:00:00.000Z", updatedAt: "2026-06-04T10:00:00.000Z" }));
+      await store.createRun(makeRun({ runId: "run-batch-b", createdAt: "2026-06-04T10:01:00.000Z", updatedAt: "2026-06-04T10:01:00.000Z" }));
+      await store.createRun(makeRun({ runId: "run-batch-c", createdAt: "2026-06-04T10:02:00.000Z", updatedAt: "2026-06-04T10:02:00.000Z" }));
+
+      const claimed = await store.claimNextQueued({ limit: 2, startedAt: "2026-06-04T10:05:00.000Z" });
+
+      expect(claimed).toHaveLength(2);
+      expect(claimed.map((c) => c.runId)).toEqual(["run-batch-a", "run-batch-b"]);
+      expect(new Set(claimed.map((c) => c.dispatchId)).size).toBe(2);
+      for (const { runId, dispatchId } of claimed) {
+        const run = await store.getRun(runId);
+        expect(run.state).toBe("RUNNING");
+        expect(run.dispatchId).toBe(dispatchId);
+      }
+      const untouched = await store.getRun("run-batch-c");
+      expect(untouched.state).toBe("QUEUED");
+
+      // Drain the remaining backlog so it doesn't leak into later tests.
+      await store.claimNextQueued({ limit: 10, startedAt: "2026-06-04T10:06:00.000Z" });
+    });
+
+    it("two concurrent calls against the same backlog claim disjoint sets", async () => {
+      await store.createRun(makeRun({ runId: "run-race-batch-1", createdAt: "2026-06-04T11:00:00.000Z", updatedAt: "2026-06-04T11:00:00.000Z" }));
+      await store.createRun(makeRun({ runId: "run-race-batch-2", createdAt: "2026-06-04T11:01:00.000Z", updatedAt: "2026-06-04T11:01:00.000Z" }));
+
+      const [batch1, batch2] = await Promise.all([
+        store.claimNextQueued({ limit: 10, startedAt: "2026-06-04T11:05:00.000Z" }),
+        store.claimNextQueued({ limit: 10, startedAt: "2026-06-04T11:05:00.000Z" })
+      ]);
+
+      const claimedIds = [...batch1, ...batch2].map((c) => c.runId);
+      expect(new Set(claimedIds).size).toBe(claimedIds.length);
+      expect(claimedIds.sort()).toEqual(["run-race-batch-1", "run-race-batch-2"]);
+    });
+  });
+
   it("markSucceeded transitions RUNNING→SUCCEEDED", async () => {
     const ok = await store.markSucceeded({ runId: "run-integration-1", endedAt: "2026-06-03T18:02:00.000Z", result: { ok: true } });
     expect(ok).toBe(true);
@@ -162,6 +205,48 @@ describe.skipIf(!pgAvailable())("RunStore integration", () => {
     expect(ok).toBe(true);
     const run = await store.getRun("run-record-1");
     expect(run.runtimeExecution).toEqual({ executionId: "exec-1", backend: "cloud-run-job" });
+  });
+
+  describe("touchHeartbeat (AVL-1 residual — pull-worker heartbeat/cancel detection)", () => {
+    it("updates heartbeat_at and returns RUNNING for a live owned run", async () => {
+      await store.createRun(makeRun({ runId: "run-heartbeat-1" }));
+      const { dispatchId } = await store.claimRun({ runId: "run-heartbeat-1", startedAt: "2026-06-05T09:00:00.000Z" });
+
+      const state = await store.touchHeartbeat({ runId: "run-heartbeat-1", dispatchId, heartbeatAt: "2026-06-05T09:00:30.000Z" });
+
+      expect(state).toBe("RUNNING");
+      const run = await store.getRun("run-heartbeat-1");
+      expect(run.heartbeatAt).toMatch(/^2026-06-05T09:00:30/);
+    });
+
+    it("returns CANCELLING when the run has been flipped to cancelling", async () => {
+      await store.createRun(makeRun({ runId: "run-heartbeat-2" }));
+      const { dispatchId } = await store.claimRun({ runId: "run-heartbeat-2", startedAt: "2026-06-05T09:00:00.000Z" });
+      await store.transition({ runId: "run-heartbeat-2", fromStates: ["RUNNING"], set: { state: "CANCELLING" } });
+
+      const state = await store.touchHeartbeat({ runId: "run-heartbeat-2", dispatchId, heartbeatAt: "2026-06-05T09:00:30.000Z" });
+
+      expect(state).toBe("CANCELLING");
+    });
+
+    it("returns null when fenced against a stale dispatchId", async () => {
+      await store.createRun(makeRun({ runId: "run-heartbeat-3" }));
+      await store.claimRun({ runId: "run-heartbeat-3", startedAt: "2026-06-05T09:00:00.000Z" });
+
+      const state = await store.touchHeartbeat({ runId: "run-heartbeat-3", dispatchId: "not-the-real-dispatch-id", heartbeatAt: "2026-06-05T09:00:30.000Z" });
+
+      expect(state).toBeNull();
+    });
+
+    it("returns null for a run that has already completed", async () => {
+      await store.createRun(makeRun({ runId: "run-heartbeat-4" }));
+      const { dispatchId } = await store.claimRun({ runId: "run-heartbeat-4", startedAt: "2026-06-05T09:00:00.000Z" });
+      await store.markSucceeded({ runId: "run-heartbeat-4", endedAt: "2026-06-05T09:01:00.000Z", result: {}, dispatchId });
+
+      const state = await store.touchHeartbeat({ runId: "run-heartbeat-4", dispatchId, heartbeatAt: "2026-06-05T09:01:30.000Z" });
+
+      expect(state).toBeNull();
+    });
   });
 
   describe("dispatch_id fencing (COR-1)", () => {

@@ -49,3 +49,8 @@ output "job_zip_bucket_name" {
 output "worker_service_name" {
   value = google_cloud_run_v2_service.worker.name
 }
+
+output "worker_pool_size" {
+  description = "Single source of truth for the worker's fixed warm-pool size -- cloudbuild.yaml reads this and applies it to both --min-instances and --max-instances on every deploy (AVL-1 residual)."
+  value       = var.worker_pool_size
+}

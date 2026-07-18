@@ -206,10 +206,10 @@ variable "worker_service_name" {
   default = "iga-scheduler-worker"
 }
 
-variable "worker_service_min_instances" {
-  description = "Minimum number of worker service instances. Set to at least 1 to prevent scale-to-zero and eliminate cold starts."
+variable "worker_pool_size" {
+  description = "Fixed size of the worker's warm pool (AVL-1 residual: the worker pulls/polls Postgres for work instead of receiving pushed HTTP requests, so Cloud Run has no inbound-request signal to autoscale on -- this drives both min_instance_count and max_instance_count, a deliberately fixed pool rather than elastic autoscaling). Peak capacity is worker_pool_size x the worker's per-instance concurrency cap (WORKER_MAX_CONCURRENCY); size deliberately."
   type        = number
-  default     = 1
+  default     = 2
 }
 
 variable "worker_max_drain_seconds" {

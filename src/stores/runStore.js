@@ -39,6 +39,45 @@ export class RunStore {
     return exists.rows.length ? { claimed: false } : { claimed: false, missing: true };
   }
 
+  // Atomically discovers and claims up to `limit` QUEUED runs in one
+  // transaction. FOR UPDATE SKIP LOCKED means multiple worker instances
+  // polling concurrently claim disjoint sets with no explicit coordination
+  // between them. Mints a fresh dispatch_id per row, same as claimRun — this
+  // is the pull-worker's batch analogue of it (AVL-1 residual).
+  async claimNextQueued({ limit = 10, startedAt } = {}) {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const { rows: candidates } = await client.query(
+        `SELECT run_id FROM job_runs
+         WHERE state = 'QUEUED'
+         ORDER BY created_at
+         LIMIT $1
+         FOR UPDATE SKIP LOCKED`,
+        [limit]
+      );
+      const claimed = [];
+      for (const { run_id: runId } of candidates) {
+        const dispatchId = randomUUID();
+        await client.query(
+          `UPDATE job_runs
+             SET state = 'RUNNING', started_at = $2, heartbeat_at = $2,
+                 status = $3, dispatch_id = $4, updated_at = $2
+           WHERE run_id = $1 AND state = 'QUEUED'`,
+          [runId, startedAt, { phase: "running", message: "Run claimed by worker" }, dispatchId]
+        );
+        claimed.push({ runId, dispatchId });
+      }
+      await client.query("COMMIT");
+      return claimed;
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
   // dispatchId is optional: when provided, the UPDATE is fenced to the exact
   // claimed attempt so a stale/ghost caller from an earlier attempt can't
   // clobber a later one; when omitted, behaves as before (state-only guard).
@@ -81,6 +120,24 @@ export class RunStore {
       params
     );
     return rows.length > 0;
+  }
+
+  // Touches heartbeat_at for an owned run and reports whether it's still
+  // RUNNING or has been flipped to CANCELLING, so the pull worker's
+  // heartbeat loop can keep the sweeper's liveness signal current and
+  // detect an operator-requested cancel in the same round trip (AVL-1
+  // residual). Fenced on dispatch_id so a stale/ghost heartbeat from a
+  // superseded attempt can't touch a re-claimed run. Returns null if the
+  // fence doesn't match (run finished, was re-claimed, or doesn't exist).
+  async touchHeartbeat({ runId, dispatchId, heartbeatAt }) {
+    const { rows } = await this.pool.query(
+      `UPDATE job_runs
+         SET heartbeat_at = $3, updated_at = $3
+       WHERE run_id = $1 AND dispatch_id = $2 AND state IN ('RUNNING', 'CANCELLING')
+       RETURNING state`,
+      [runId, dispatchId, heartbeatAt]
+    );
+    return rows.length ? rows[0].state : null;
   }
 
   async transition({ runId, fromStates, set }) {

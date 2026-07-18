@@ -76,11 +76,9 @@ describe("startApplication", () => {
 
     expect(calls).toEqual(["validate", "createApp", "listen"]);
     expect(mocks.createApp).toHaveBeenCalledWith(expect.objectContaining({
-      workerRunService: expect.any(Object),
       readiness: expect.objectContaining({
         environment: "production",
         executionMode: "isolated",
-        runtimeWorkerConfigured: true,
         runtimeServiceAccountConfigured: true,
         runtimeBrokerConfigured: true
       })

@@ -12,20 +12,23 @@ resource "google_cloud_run_v2_service" "worker" {
   template {
     service_account = google_service_account.runtime.email
 
-    # This is Cloud Run's per-request timeout (how long a single HTTP request —
-    # /execute, /cancel, /health — may run), NOT a graceful-shutdown/drain grace
-    # period. Cloud Run's actual SIGTERM-to-SIGKILL window on scale-in/deploy is
-    # a short, platform-controlled interval that this setting does not extend
-    # (AVL-1). Since /execute responds 202 almost immediately and the job runs
-    # detached in the background (workerApp.js), this also doesn't bound job
-    # execution duration — JobRuntimeExecutor's own per-job timeout
-    # (WORKER_MAX_TIMEOUT_SECONDS) does that. Set high mainly so a slow /cancel
-    # call is never itself cut short by the request timeout.
+    # This is Cloud Run's per-request timeout, NOT a graceful-shutdown/drain
+    # grace period. Cloud Run's actual SIGTERM-to-SIGKILL window on scale-in/
+    # deploy is a short, platform-controlled interval that this setting does
+    # not extend (AVL-1). The worker's only HTTP route left is /health (AVL-1
+    # residual: dispatch and cancel are pull-based now, not pushed over
+    # HTTP — see pollLoop.js), which responds immediately, so this setting
+    # has little practical effect either way; kept high mainly so it never
+    # becomes the reason a slow-starting health probe gets cut off.
     timeout = "${var.worker_max_drain_seconds}s"
 
+    # Fixed warm pool, not elastic autoscaling (AVL-1 residual): the worker
+    # polls Postgres for work rather than receiving pushed HTTP requests, so
+    # Cloud Run's request-based autoscaling signal never fires here. Both
+    # bounds are pinned to the same variable on purpose.
     scaling {
-      min_instance_count = var.worker_service_min_instances
-      max_instance_count = 10
+      min_instance_count = var.worker_pool_size
+      max_instance_count = var.worker_pool_size
     }
 
     containers {

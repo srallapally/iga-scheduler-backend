@@ -36,10 +36,6 @@ function workerProductionEnv(overrides = {}) {
     GCP_PROJECT_ID: "iga-scheduler",
     RUNTIME_SERVICE_ACCOUNT_EMAIL: "iga-runtime@iga-scheduler.iam.gserviceaccount.com",
     RUNTIME_BROKER_URL: "https://scheduler.example.test",
-    IGA_TOKEN_ENDPOINT: "https://iga.example.test/oauth2/token",
-    IGA_CLIENT_ID: "iga-client-id",
-    IGA_CLIENT_SECRET: "iga-client-secret",
-    IGA_BASE_URL: "https://iga.example.test",
     WORKER_REQUIRE_RUNTIME_ISOLATION: "false",
     ...overrides
   };
@@ -57,11 +53,7 @@ describe("validateWorkerStartupConfig", () => {
   it.each([
     "GCP_PROJECT_ID",
     "RUNTIME_SERVICE_ACCOUNT_EMAIL",
-    "RUNTIME_BROKER_URL",
-    "IGA_TOKEN_ENDPOINT",
-    "IGA_CLIENT_ID",
-    "IGA_CLIENT_SECRET",
-    "IGA_BASE_URL"
+    "RUNTIME_BROKER_URL"
   ])("rejects missing %s", (varName) => {
     expect(() => validateWorkerStartupConfig({ env: workerProductionEnv({ [varName]: "" }) }))
       .toThrow(`Missing required worker environment variables: ${varName}`);
@@ -70,6 +62,15 @@ describe("validateWorkerStartupConfig", () => {
   it("accepts config without RUNTIME_WORKER_URL — worker never reads it", () => {
     const env = workerProductionEnv();
     delete env.RUNTIME_WORKER_URL;
+    expect(validateWorkerStartupConfig({ env })).toEqual({ status: "ok" });
+  });
+
+  it("accepts config without direct IGA credentials — worker reaches IGA only through the broker", () => {
+    const env = workerProductionEnv();
+    delete env.IGA_TOKEN_ENDPOINT;
+    delete env.IGA_CLIENT_ID;
+    delete env.IGA_CLIENT_SECRET;
+    delete env.IGA_BASE_URL;
     expect(validateWorkerStartupConfig({ env })).toEqual({ status: "ok" });
   });
 

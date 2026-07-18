@@ -44,8 +44,20 @@ function workerProductionEnv(overrides = {}) {
 }
 
 describe("validateWorkerStartupConfig", () => {
-  it("skips non-production environments", () => {
-    expect(validateWorkerStartupConfig({ env: { NODE_ENV: "test" } })).toEqual({ status: "skipped", reason: "not_production" });
+  it("skips only under the test runner", () => {
+    expect(validateWorkerStartupConfig({ env: { NODE_ENV: "test" } })).toEqual({ status: "skipped", reason: "test_environment" });
+  });
+
+  it("fails closed (enforces, does not skip) when NODE_ENV is unset", () => {
+    expect(() => validateWorkerStartupConfig({ env: {} })).toThrow(/Missing required worker environment variables/);
+  });
+
+  it("fails closed when NODE_ENV=development (SEC-8: drift no longer silently skips)", () => {
+    expect(() => validateWorkerStartupConfig({ env: { NODE_ENV: "development" } })).toThrow(/Missing required worker environment variables/);
+  });
+
+  it("fails closed on NODE_ENV casing drift (SEC-8: e.g. 'Production' typo)", () => {
+    expect(() => validateWorkerStartupConfig({ env: { NODE_ENV: "Production" } })).toThrow(/Missing required worker environment variables/);
   });
 
   it("accepts a fully configured worker", () => {
@@ -90,8 +102,20 @@ describe("validateWorkerStartupConfig", () => {
 });
 
 describe("validateProductionStartupConfig", () => {
-  it("skips non-production environments", () => {
-    expect(validateProductionStartupConfig({ env: { NODE_ENV: "test" } })).toEqual({ status: "skipped", reason: "not_production" });
+  it("skips only under the test runner", () => {
+    expect(validateProductionStartupConfig({ env: { NODE_ENV: "test" } })).toEqual({ status: "skipped", reason: "test_environment" });
+  });
+
+  it("fails closed (enforces, does not skip) when NODE_ENV is unset", () => {
+    expect(() => validateProductionStartupConfig({ env: {} })).toThrow(/Missing required production environment variables/);
+  });
+
+  it("fails closed when NODE_ENV=development (SEC-8: drift no longer silently skips)", () => {
+    expect(() => validateProductionStartupConfig({ env: { NODE_ENV: "development" } })).toThrow(/Missing required production environment variables/);
+  });
+
+  it("fails closed on NODE_ENV casing drift (SEC-8: e.g. 'Production' typo)", () => {
+    expect(() => validateProductionStartupConfig({ env: { NODE_ENV: "Production" } })).toThrow(/Missing required production environment variables/);
   });
 
   it("accepts isolated production runtime configuration", () => {

@@ -1,5 +1,10 @@
 export function validateWorkerStartupConfig({ env = process.env } = {}) {
-  if (env.NODE_ENV !== "production") return { status: "skipped", reason: "not_production" };
+  // Fail closed (SEC-8): startWorker() has no legitimate non-production run
+  // mode of its own -- the only real local-dev path is app.local.js, which
+  // never calls this validator at all. So this skip exists purely for the
+  // test runner; any other NODE_ENV value (unset, a typo, a staging value
+  // copied forward) now enforces rather than silently skipping.
+  if (env.NODE_ENV === "test") return { status: "skipped", reason: "test_environment" };
 
   const required = [
     "GCP_PROJECT_ID",
@@ -28,7 +33,10 @@ export function validateWorkerStartupConfig({ env = process.env } = {}) {
 }
 
 export function validateProductionStartupConfig({ env = process.env } = {}) {
-  if (env.NODE_ENV !== "production") return { status: "skipped", reason: "not_production" };
+  // Fail closed (SEC-8): same reasoning as validateWorkerStartupConfig --
+  // startApplication() has no legitimate non-production run mode either;
+  // app.local.js is the real local-dev entrypoint and never calls this.
+  if (env.NODE_ENV === "test") return { status: "skipped", reason: "test_environment" };
 
   const required = [
     "GCP_PROJECT_ID",

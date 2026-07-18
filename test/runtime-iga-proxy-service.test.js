@@ -102,4 +102,64 @@ describe("RuntimeIgaProxyService", () => {
 
     expect(igaClient.request).not.toHaveBeenCalled();
   });
+
+  describe("dispatch binding (SEC-7)", () => {
+    it("proxies the request when dispatchId matches the run's current dispatch", async () => {
+      const { service, igaClient } = createService({
+        run: { runId: "run-1", state: "RUNNING", dispatchId: "dispatch-abc" }
+      });
+
+      await service.request({
+        runId: "run-1",
+        dispatchId: "dispatch-abc",
+        method: "GET",
+        path: "/iga/governance/applications"
+      });
+
+      expect(igaClient.request).toHaveBeenCalledWith("GET", "/iga/governance/applications", undefined);
+    });
+
+    it("rejects a mismatched dispatchId when the run has one on record", async () => {
+      const { service, igaClient } = createService({
+        run: { runId: "run-1", state: "RUNNING", dispatchId: "dispatch-abc" }
+      });
+
+      await expect(service.request({
+        runId: "run-1",
+        dispatchId: "dispatch-from-a-different-run",
+        method: "GET",
+        path: "/iga/governance/applications"
+      })).rejects.toMatchObject({ code: "IGA_RUN_DISPATCH_MISMATCH", statusCode: 403 });
+
+      expect(igaClient.request).not.toHaveBeenCalled();
+    });
+
+    it("rejects a missing dispatchId when the run has one on record", async () => {
+      const { service, igaClient } = createService({
+        run: { runId: "run-1", state: "RUNNING", dispatchId: "dispatch-abc" }
+      });
+
+      await expect(service.request({
+        runId: "run-1",
+        method: "GET",
+        path: "/iga/governance/applications"
+      })).rejects.toMatchObject({ code: "IGA_RUN_DISPATCH_MISMATCH", statusCode: 403 });
+
+      expect(igaClient.request).not.toHaveBeenCalled();
+    });
+
+    it("skips the check when the run store never minted a dispatchId (local dev)", async () => {
+      const { service, igaClient } = createService({
+        run: { runId: "run-1", state: "RUNNING" }
+      });
+
+      await service.request({
+        runId: "run-1",
+        method: "GET",
+        path: "/iga/governance/applications"
+      });
+
+      expect(igaClient.request).toHaveBeenCalledWith("GET", "/iga/governance/applications", undefined);
+    });
+  });
 });

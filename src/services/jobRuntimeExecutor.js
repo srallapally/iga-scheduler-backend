@@ -75,7 +75,7 @@ export class JobRuntimeExecutor {
     return { status: "killed" };
   }
 
-  async execute({ runId, run, execution, artifactBuffer, context } = {}) {
+  async execute({ runId, dispatchId, run, execution, artifactBuffer, context } = {}) {
     const resolvedBuffer = await this.resolveArtifactBuffer({ execution, artifactBuffer });
     const normalizedEntrypoint = this.validateExecuteRequest({ runId, run, execution, artifactBuffer: resolvedBuffer, context });
     this.validateRuntimeIsolation();
@@ -84,10 +84,10 @@ export class JobRuntimeExecutor {
       const runtime = execution.definition.runtime;
       const contextFilePath = await this.writeContextFile({ extractDir: extracted.extractDir, context: context || {} });
       if (runtime === "python") {
-        return await this.executePythonEntrypoint({ runId, execution, extracted, contextFilePath });
+        return await this.executePythonEntrypoint({ runId, dispatchId, execution, extracted, contextFilePath });
       }
       await fs.copyFile(SDK_SOURCE_PATH, path.join(extracted.extractDir, "scheduler-sdk.js"));
-      return await this.executeNodeEntrypoint({ runId, execution, extracted, contextFilePath });
+      return await this.executeNodeEntrypoint({ runId, dispatchId, execution, extracted, contextFilePath });
     } finally {
       await extracted.cleanup();
     }
@@ -186,7 +186,7 @@ export class JobRuntimeExecutor {
   }
   async writeContextFile({ extractDir, context }) { const contextDir = path.join(extractDir, CONTEXT_DIR); const contextFilePath = path.join(contextDir, CONTEXT_FILE); await fs.mkdir(contextDir, { recursive: true, mode: 0o700 }); await fs.writeFile(contextFilePath, JSON.stringify(context, null, 2), { encoding: "utf8", mode: 0o600 }); return contextFilePath; }
 
-  executeNodeEntrypoint({ runId, execution, extracted, contextFilePath }) {
+  executeNodeEntrypoint({ runId, dispatchId, execution, extracted, contextFilePath }) {
     const memoryLimitMb = this.effectiveMemoryLimitMb(execution.definition.memoryMb);
     const { command, args } = this.resolveSpawnCommand("javascript", execution.definition.runtimeVersion, extracted.entrypointPath, memoryLimitMb);
     return this._spawnEntrypoint({
@@ -198,11 +198,12 @@ export class JobRuntimeExecutor {
         IGA_SCHEDULER_RUN_ID: runId,
         IGA_SCHEDULER_CONTEXT_FILE: contextFilePath,
         ...(process.env.RUNTIME_BROKER_URL ? { IGA_BROKER_URL: process.env.RUNTIME_BROKER_URL } : {}),
+        ...(dispatchId ? { IGA_SCHEDULER_DISPATCH_ID: dispatchId } : {}),
       }
     });
   }
 
-  executePythonEntrypoint({ runId, execution, extracted, contextFilePath }) {
+  executePythonEntrypoint({ runId, dispatchId, execution, extracted, contextFilePath }) {
     const memoryLimitMb = this.effectiveMemoryLimitMb(execution.definition.memoryMb);
     const { command, args } = this.resolveSpawnCommand("python", execution.definition.runtimeVersion, extracted.entrypointPath, memoryLimitMb);
     const existingPythonPath = process.env.PYTHONPATH || "";
@@ -216,6 +217,7 @@ export class JobRuntimeExecutor {
         IGA_SCHEDULER_CONTEXT_FILE: contextFilePath,
         PYTHONPATH: pythonPath,
         ...(process.env.RUNTIME_BROKER_URL ? { IGA_BROKER_URL: process.env.RUNTIME_BROKER_URL } : {}),
+        ...(dispatchId ? { IGA_SCHEDULER_DISPATCH_ID: dispatchId } : {}),
       }
     });
   }

@@ -66,8 +66,9 @@ const TOKEN_REFRESH_SKEW_MS = 60_000;
 const REQUEST_TIMEOUT_MS = 30_000;
 
 class BrokerIgaClient {
-  constructor({ runId, brokerUrl, fetchImpl = fetch }) {
+  constructor({ runId, dispatchId, brokerUrl, fetchImpl = fetch }) {
     this._runId = runId;
+    this._dispatchId = dispatchId;
     this._brokerUrl = brokerUrl.replace(/\/+$/, "");
     this._fetch = fetchImpl;
     this._cachedToken = null; // { token, expiresAtMs }
@@ -86,7 +87,7 @@ class BrokerIgaClient {
         "Content-Type": "application/json",
         Authorization: `Bearer ${token}`
       },
-      body: JSON.stringify({ runId: this._runId, method, path, body })
+      body: JSON.stringify({ runId: this._runId, dispatchId: this._dispatchId, method, path, body })
     });
 
     if (res.status === 401 && retryOn401) {
@@ -229,7 +230,7 @@ function safeParseJson(text) {
 function buildIgaClient(env) {
   const brokerUrl = env.IGA_BROKER_URL;
   if (brokerUrl) {
-    return new BrokerIgaClient({ runId: env.IGA_SCHEDULER_RUN_ID, brokerUrl });
+    return new BrokerIgaClient({ runId: env.IGA_SCHEDULER_RUN_ID, dispatchId: env.IGA_SCHEDULER_DISPATCH_ID, brokerUrl });
   }
   // Local dev fallback: direct IGA credentials injected by LocalWorkerRunService
   if (env.IGA_BASE_URL && env.IGA_TOKEN_ENDPOINT && env.IGA_CLIENT_ID && env.IGA_CLIENT_SECRET) {

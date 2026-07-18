@@ -33,6 +33,7 @@ Priority legend:
 | COR-7 | P1 | Definition delete does not cascade; orphaned instances fail-loop forever | Correctness | Verified | **Resolved** — this PR, ADR 0012 |
 | CIP-2 | P2 | Test suite not hermetic; PG store tests skip silently without a database | CI / test integrity | Verified | Open |
 | SEC-6 | P2 | Self-asserted approval/scan presented as a trust chain | Security / control theatre | Verified | Open |
+| SEC-7 | P2 | IGA proxy does not bind caller to run; audit attribution forgeable across concurrent runs | Security / audit integrity | Verified | **Resolved** — this PR, ADR 0018 |
 | OPS-1 | P2 | GCS bucket missing `public_access_prevention = "enforced"` | Hardening | Verified | Open |
 | SCA-1 | P2 | Pipeline throughput ceiling well below data-layer capacity | Scalability | By inspection | Open |
 | DBT-1 | P3 | Dead tenancy plumbing (`tenant_id`, `tenantId`) after multi-tenancy dropped | Cleanup | By inspection | Open |
@@ -155,6 +156,12 @@ Priority legend:
 **Where:** `src/services/jobDefinitionService.js:57-66` stamps `APPROVED`/`CLEAN` unconditionally; `src/services/workerRunService.js:357-362` validates fields the same path always writes.
 **What:** Ceremony that resembles a control. (`docs/architecture-review.md` marks this "Fixed" as the P0 trust gate — I disagree: writing constants and checking they equal the constants is not a trust decision. Flagging the disagreement rather than overriding the doc.)
 **Fix:** Wire a real scanner/approval workflow, or drop the fields to avoid false assurance.
+
+### SEC-7 — IGA proxy does not bind caller to run — **Resolved**
+**Where:** `src/services/runtimeIgaProxyService.js:55-99`.
+**What:** `request({ runId, ..., principal })` validated only `run.state === "RUNNING"`; `principal` is identical across all concurrent jobs (every job assumes the same runtime SA), so it carries no per-run identity. The job's SDK puts its own `runId` straight into the proxy request body from an env var it controls. Since run IDs are deterministic (`instanceId:scheduledFireTime`), any RUNNING job could proxy IGA calls tagged with any other RUNNING run's id — audit-attribution forgery across concurrent runs, not confidentiality (single-tenant). Survived SEC-3's route removal because it lives in the proxy path, not the completion route; ADR 0008 had flagged this class of gap as an open follow-on.
+**Fix:** Bind the proxy call to the run's actual dispatch attempt rather than trusting `body.runId` alone. Reused COR-1's `dispatch_id` (already minted fresh per claim and persisted on the run row) as the binding value instead of introducing a new credential type.
+**Resolution:** `dispatch_id` is now threaded from `RunStore.claimRun` through the worker's `/execute` body into `JobRuntimeExecutor.execute()`, which injects it into the job subprocess env as `IGA_SCHEDULER_DISPATCH_ID` (both Node and Python spawn paths). Both SDKs (`BrokerIgaClient` in `scheduler-sdk.js` and `iga_scheduler/iga_client.py`) read it and send it back as `dispatchId` on every proxy request. `RuntimeIgaProxyService.request()` now rejects with `IGA_RUN_DISPATCH_MISMATCH` (403) when the run has a stored `dispatch_id` and the caller's doesn't match — before any audit event is emitted, consistent with how `RUN_NOT_FOUND`/`RUN_NOT_RUNNING` already reject. The check is skipped when the run store never minted a `dispatch_id` (local dev's `LocalRunStore`), preserving today's behavior there. Side benefit: a ghost subprocess from a superseded dispatch (COR-1's concern) now also gets rejected at the IGA-proxy layer, not just at the DB-fencing layer. See `docs/adr/0018-iga-proxy-run-binding.md`. **Residual:** SEC-4 (same-container co-residency env read) is unrelated and still open — if a co-resident process can read another job's environment directly, it can still read that job's `dispatch_id`.
 
 ### OPS-1 — GCS bucket hardening
 **Where:** `terraform/storage.tf` (uniform access + versioning present; `public_access_prevention` absent).

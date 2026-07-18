@@ -122,6 +122,22 @@ describe("BrokerIgaClient via createContext", () => {
     });
   });
 
+  it("includes dispatchId in the request body when set (SEC-7)", async () => {
+    await withContextFile(BASE_CONTEXT, async (file) => {
+      const oidcToken = buildFakeJwt({ exp: Math.floor(Date.now() / 1000) + 3600 });
+      const fetchImpl = vi.fn()
+        .mockResolvedValueOnce({ ok: true, status: 200, text: async () => oidcToken })
+        .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ result: { ok: true } }) });
+
+      const { BrokerIgaClientForTest } = await importBrokerClient(fetchImpl);
+      const client = new BrokerIgaClientForTest({ runId: "run-1", dispatchId: "dispatch-abc", brokerUrl: "https://broker.example.com" });
+      await client.execute("GET", "/info/ping");
+
+      const sentBody = JSON.parse(fetchImpl.mock.calls[1][1].body);
+      expect(sentBody.dispatchId).toBe("dispatch-abc");
+    });
+  });
+
   it("retries once on 401 with a fresh token", async () => {
     const token1 = buildFakeJwt({ exp: Math.floor(Date.now() / 1000) + 3600 });
     const token2 = buildFakeJwt({ exp: Math.floor(Date.now() / 1000) + 3600 });
@@ -219,8 +235,9 @@ async function importBrokerClient(fetchImpl) {
   const TIMEOUT = 30_000;
 
   class BrokerIgaClientForTest {
-    constructor({ runId, brokerUrl }) {
+    constructor({ runId, dispatchId, brokerUrl }) {
       this._runId = runId;
+      this._dispatchId = dispatchId;
       this._brokerUrl = brokerUrl.replace(/\/+$/, "");
       this._fetch = fetchImpl;
       this._cachedToken = null;
@@ -234,7 +251,7 @@ async function importBrokerClient(fetchImpl) {
         method: "POST",
         signal: AbortSignal.timeout(TIMEOUT),
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ runId: this._runId, method, path, body })
+        body: JSON.stringify({ runId: this._runId, dispatchId: this._dispatchId, method, path, body })
       });
       if (res.status === 401 && retryOn401) {
         this._cachedToken = null;

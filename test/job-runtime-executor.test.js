@@ -245,6 +245,41 @@ describe("JobRuntimeExecutor", () => {
     expect(capturedEnvs[0]).not.toHaveProperty("IGA_BASE_URL");
     expect(capturedEnvs[0].IGA_BROKER_URL).toBe("https://broker.test.example.com");
   });
+
+  it("passes dispatchId to the Node child env as IGA_SCHEDULER_DISPATCH_ID (SEC-7)", async () => {
+    const executor = createExecutor();
+    const capturedEnvs = [];
+    const origSpawn = executor._spawnEntrypoint.bind(executor);
+    executor._spawnEntrypoint = (opts) => { capturedEnvs.push(opts.extraEnv); return origSpawn(opts); };
+
+    await executor.executeNodeEntrypoint({
+      runId: "run-1",
+      dispatchId: "dispatch-abc",
+      execution: { definition: { runtime: "javascript", runtimeVersion: "nodejs22", entrypoint: "index.js" } },
+      extracted: { extractDir: "/tmp", entrypointPath: "index.js", cleanup: async () => {} },
+      contextFilePath: "/tmp/context.json"
+    }).catch(() => {});
+
+    expect(capturedEnvs).toHaveLength(1);
+    expect(capturedEnvs[0].IGA_SCHEDULER_DISPATCH_ID).toBe("dispatch-abc");
+  });
+
+  it("omits IGA_SCHEDULER_DISPATCH_ID from the Node child env when no dispatchId is given", async () => {
+    const executor = createExecutor();
+    const capturedEnvs = [];
+    const origSpawn = executor._spawnEntrypoint.bind(executor);
+    executor._spawnEntrypoint = (opts) => { capturedEnvs.push(opts.extraEnv); return origSpawn(opts); };
+
+    await executor.executeNodeEntrypoint({
+      runId: "run-1",
+      execution: { definition: { runtime: "javascript", runtimeVersion: "nodejs22", entrypoint: "index.js" } },
+      extracted: { extractDir: "/tmp", entrypointPath: "index.js", cleanup: async () => {} },
+      contextFilePath: "/tmp/context.json"
+    }).catch(() => {});
+
+    expect(capturedEnvs).toHaveLength(1);
+    expect(capturedEnvs[0]).not.toHaveProperty("IGA_SCHEDULER_DISPATCH_ID");
+  });
 });
 
 describe("JobRuntimeExecutor - resolveArtifactBuffer", () => {
@@ -449,5 +484,40 @@ describe("JobRuntimeExecutor - Python support", () => {
     expect(capturedEnvs[0]).not.toHaveProperty("IGA_TOKEN_ENDPOINT");
     expect(capturedEnvs[0]).not.toHaveProperty("IGA_BASE_URL");
     expect(capturedEnvs[0].IGA_BROKER_URL).toBe("https://broker.test.example.com");
+  });
+
+  it("passes dispatchId to the Python child env as IGA_SCHEDULER_DISPATCH_ID (SEC-7)", async () => {
+    const executor = createExecutor();
+    const capturedEnvs = [];
+    const origSpawn = executor._spawnEntrypoint.bind(executor);
+    executor._spawnEntrypoint = (opts) => { capturedEnvs.push(opts.extraEnv); return origSpawn(opts); };
+
+    await executor.executePythonEntrypoint({
+      runId: "run-1",
+      dispatchId: "dispatch-abc",
+      execution: { definition: { runtime: "python", runtimeVersion: "python311", entrypoint: "main.py" } },
+      extracted: { extractDir: "/tmp", entrypointPath: "main.py", cleanup: async () => {} },
+      contextFilePath: "/tmp/context.json"
+    }).catch(() => {});
+
+    expect(capturedEnvs).toHaveLength(1);
+    expect(capturedEnvs[0].IGA_SCHEDULER_DISPATCH_ID).toBe("dispatch-abc");
+  });
+
+  it("omits IGA_SCHEDULER_DISPATCH_ID from the Python child env when no dispatchId is given", async () => {
+    const executor = createExecutor();
+    const capturedEnvs = [];
+    const origSpawn = executor._spawnEntrypoint.bind(executor);
+    executor._spawnEntrypoint = (opts) => { capturedEnvs.push(opts.extraEnv); return origSpawn(opts); };
+
+    await executor.executePythonEntrypoint({
+      runId: "run-1",
+      execution: { definition: { runtime: "python", runtimeVersion: "python311", entrypoint: "main.py" } },
+      extracted: { extractDir: "/tmp", entrypointPath: "main.py", cleanup: async () => {} },
+      contextFilePath: "/tmp/context.json"
+    }).catch(() => {});
+
+    expect(capturedEnvs).toHaveLength(1);
+    expect(capturedEnvs[0]).not.toHaveProperty("IGA_SCHEDULER_DISPATCH_ID");
   });
 });

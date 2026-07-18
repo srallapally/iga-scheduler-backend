@@ -21,7 +21,7 @@ Priority legend:
 | SEC-4 | P1 | Same-UID co-residency: job subprocess can read broker `/proc/1/environ` | Security / isolation | By inspection | **Partially resolved** — PR #57, ADR 0009. DB password moved to Secret Manager fetch (no env-var secrets left to leak via `/proc/1/environ` today); job-UID separation (`gosu`/`jobrunner`) deferred to AVL-1 — could not be verified in a real container in this environment, and container-per-job supersedes the question anyway |
 | COR-1 | P1 | No fencing token: a ghost subprocess can complete a re-dispatched run | Correctness / concurrency | By inspection | Open |
 | COR-2 | P1 | Cancellation records CANCELLED while side effects fully execute | Correctness / audit integrity | Verified | Open |
-| COR-3 | P1 | Definition version hardcoded to 1; re-upload swaps code under a pinned version | Change control | Verified | Open |
+| COR-3 | P1 | Definition version hardcoded to 1; re-upload swaps code under a pinned version | Change control | Verified | **Resolved** — this PR, ADR 0013. `LocalDefinitionService` has the same pattern, left untouched (local-dev only) |
 | AVL-1 | P1 | Worker runs jobs as fire-and-forget subprocess; killed on every deploy/scale-in | Availability / lifecycle | By inspection | Open |
 | AVL-2 | P1 | ES on the dispatch hot path; ES blip permanently fails in-flight dispatches | Availability | By inspection | Open |
 | AVL-3 | P1 | Scheduler service lacks always-on CPU; dispatch/sweep loops stall to tick cadence | Availability | Verified | **Resolved** — this PR, ADR 0011 |
@@ -84,10 +84,11 @@ Priority legend:
 **What:** Cancel on RUNNING flips to CANCELLING; the launcher can't stop the subprocess; it runs to completion; its completion no-ops (state ≠ RUNNING); the sweeper force-cancels at the threshold. Record says CANCELLED while side effects — IGA writes included — fully happened.
 **Fix:** Implement real cancellation (pull-worker model makes this a claim-check the worker honors), or remove the CANCELLING state and document that cancel only prevents not-yet-started runs.
 
-### COR-3 — Definition version is a facade
+### COR-3 — Definition version is a facade — **Resolved**
 **Where:** `src/services/jobDefinitionService.js:28` (`const version = 1`); never incremented. Consumer side fully built: instances pin `definitionVersion`; dispatch enforces `DEFINITION_VERSION_MISMATCH` (`src/services/workerRunService.js:389`).
 **What:** The only way to update job code is delete + re-POST the same `definitionId`, which returns version 1 again — so pinned instances execute different code under the same pinned version. The digest changes in `jobZip.sha256` (forensically reconstructable), but the pinning mechanism designed to catch this is blind to it.
 **Fix:** Increment version on re-upload (digest-keyed GCS paths already allow coexisting artifacts), or remove the pinning fields so nothing falsely relies on them.
+**Resolution:** `createDefinition` now reads any prior document (including soft-deleted) via `getDefinition` before writing, incrementing `version` on re-upload instead of resetting to 1; a genuinely new `definitionId` still uses the atomic `es.create` (409 conflict detection preserved), a re-upload uses `es.index` (full-document upsert). The existing `DEFINITION_VERSION_MISMATCH` check (already correct) can now actually catch a code swap. See `docs/adr/0013-definition-version-increment.md`. **Residual:** `LocalDefinitionService` (local-dev, SQLite-backed) has the identical hardcoded-version pattern and was left untouched, consistent with COR-7's precedent of scoping definition-lifecycle fixes to the production ES-backed service.
 
 ### COR-7 — Definition delete does not cascade — **Resolved**
 **Where:** `src/services/jobDefinitionService.js:151-163` (marks ES doc DELETED); instances left ACTIVE.

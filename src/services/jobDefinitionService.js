@@ -26,7 +26,11 @@ export class JobDefinitionService {
       wrapperVersion: parsed.wrapperVersion
     });
 
-    const version = 1;
+    // getDefinition returns any prior document regardless of state (including
+    // soft-deleted), so a delete + re-upload of the same definitionId still
+    // increments the version rather than resetting to 1 (COR-3).
+    const existing = await this.getDefinition(parsed.definitionId);
+    const version = existing ? existing.version + 1 : 1;
     const approvedPath = `approved/${parsed.definitionId}/${digest}/job.zip`;
     const approvedFile = this.bucket.file(approvedPath);
 
@@ -76,12 +80,21 @@ export class JobDefinitionService {
         updatedAt: now
       };
 
-      await this.es.create({
-        index: this.index,
-        id: parsed.definitionId,
-        document: doc,
-        refresh: true
-      });
+      if (existing) {
+        await this.es.index({
+          index: this.index,
+          id: parsed.definitionId,
+          document: doc,
+          refresh: true
+        });
+      } else {
+        await this.es.create({
+          index: this.index,
+          id: parsed.definitionId,
+          document: doc,
+          refresh: true
+        });
+      }
 
       return doc;
     } catch (error) {

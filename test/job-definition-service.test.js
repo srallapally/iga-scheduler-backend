@@ -83,11 +83,20 @@ function createInstanceStoreMock(instances = []) {
   };
 }
 
+function notFoundGet() {
+  return vi.fn(async () => {
+    const error = new Error("not found");
+    error.meta = { statusCode: 404 };
+    throw error;
+  });
+}
+
 describe("JobDefinitionService", () => {
   it("validates artifact before writing to GCS", async () => {
     const storageMock = createStorageMock();
     const esClient = {
-      create: vi.fn(async () => ({ result: "created" }))
+      create: vi.fn(async () => ({ result: "created" })),
+      get: notFoundGet()
     };
     const service = createService({ esClient, storageMock });
 
@@ -104,7 +113,8 @@ describe("JobDefinitionService", () => {
   it("writes only the approved artifact path after validation", async () => {
     const storageMock = createStorageMock();
     const esClient = {
-      create: vi.fn(async () => ({ result: "created" }))
+      create: vi.fn(async () => ({ result: "created" })),
+      get: notFoundGet()
     };
     const service = createService({ esClient, storageMock });
 
@@ -113,6 +123,7 @@ describe("JobDefinitionService", () => {
       artifactBuffer: await createZipBuffer()
     });
 
+    expect(doc.version).toBe(1);
     expect(storageMock.bucket.file).toHaveBeenCalledTimes(1);
     expect(storageMock.bucket.file.mock.calls[0][0]).toMatch(/^approved\/risk-score\//);
     expect(storageMock.bucket.file.mock.calls[0][0]).not.toContain("quarantine");
@@ -131,7 +142,8 @@ describe("JobDefinitionService", () => {
     const esClient = {
       create: vi.fn(async () => {
         throw conflict;
-      })
+      }),
+      get: notFoundGet()
     };
     const service = createService({ esClient, storageMock });
 
@@ -151,7 +163,8 @@ describe("JobDefinitionService", () => {
     const esClient = {
       create: vi.fn(async () => {
         throw createFailure;
-      })
+      }),
+      get: notFoundGet()
     };
     const service = createService({ esClient, storageMock });
 
@@ -161,6 +174,52 @@ describe("JobDefinitionService", () => {
     })).rejects.toThrow("es unavailable");
 
     expect(storageMock.file.delete).toHaveBeenCalledWith({ ignoreNotFound: true });
+  });
+});
+
+describe("JobDefinitionService — version increments on re-upload (COR-3)", () => {
+  it("assigns version 1 on the first upload of a definitionId", async () => {
+    const storageMock = createStorageMock();
+    const esClient = {
+      create: vi.fn(async () => ({ result: "created" })),
+      get: notFoundGet()
+    };
+    const service = createService({ esClient, storageMock });
+
+    const doc = await service.createDefinition({ metadata: metadata(), artifactBuffer: await createZipBuffer() });
+
+    expect(doc.version).toBe(1);
+    expect(esClient.create).toHaveBeenCalledTimes(1);
+  });
+
+  it("increments the version on re-upload of an existing definitionId", async () => {
+    const storageMock = createStorageMock();
+    const esClient = {
+      index: vi.fn(async () => ({ result: "updated" })),
+      get: vi.fn(async () => ({ _source: { definitionId: "risk-score", version: 1, state: "ACTIVE" } }))
+    };
+    const service = createService({ esClient, storageMock });
+
+    const doc = await service.createDefinition({ metadata: metadata(), artifactBuffer: await createZipBuffer() });
+
+    expect(doc.version).toBe(2);
+    expect(esClient.index).toHaveBeenCalledTimes(1);
+    expect(esClient.index.mock.calls[0][0]).toMatchObject({ id: "risk-score" });
+  });
+
+  it("increments the version on re-upload of a soft-deleted definitionId", async () => {
+    const storageMock = createStorageMock();
+    const esClient = {
+      index: vi.fn(async () => ({ result: "updated" })),
+      get: vi.fn(async () => ({ _source: { definitionId: "risk-score", version: 3, state: "DELETED", enabled: false } }))
+    };
+    const service = createService({ esClient, storageMock });
+
+    const doc = await service.createDefinition({ metadata: metadata(), artifactBuffer: await createZipBuffer() });
+
+    expect(doc.version).toBe(4);
+    expect(doc.state).toBe("ACTIVE");
+    expect(doc.enabled).toBe(true);
   });
 });
 

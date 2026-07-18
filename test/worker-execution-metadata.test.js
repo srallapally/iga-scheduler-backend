@@ -38,7 +38,8 @@ function serviceWithDefinition(definitionDocument) {
     esClient: {
       get: async () => ({ _source: definitionDocument }),
       update: async () => ({ result: "updated" })
-    }
+    },
+    definitionsIndex: "scheduler_definitions_v1"
   });
 }
 

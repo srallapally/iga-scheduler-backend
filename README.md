@@ -1,8 +1,26 @@
 # IGA Scheduler Backend
 
-A GCP-hosted job scheduling backend. Manages job definitions, cron-scheduled instances, and individual job runs. The public API is secured with PingOne or PingOne Advanced Identity Cloud (AIC) OAuth (client credentials + JWKS). Internal endpoints use Google OIDC.
+A GCP-hosted job scheduling backend. Manages job definitions, cron-scheduled instances, and individual job runs. The public API is secured with PingOne Advanced Identity Cloud (AIC) OAuth (client credentials + JWKS). Internal endpoints use Google OIDC.
 
 Supports **JavaScript (Node 22)** and **Python (3.11 / 3.12)** job runtimes.
+
+## What & why
+
+**What this is.** A single-tenant service — one deployment per customer's PingOne Advanced Identity Cloud (AIC) environment — that runs *customer-written, untrusted* job code against that AIC tenant on a schedule. Operators upload versioned ZIP artifacts; the system verifies them, schedules them, runs them as capped subprocesses in a pull-worker pool, and brokers all IGA API access through a proxy. The IGA OAuth credential never enters the job runtime, and every proxy call is tied to the specific dispatch attempt that spawned it (SEC-7).
+
+**Why not an off-the-shelf engine.** Workflow engines (Temporal, Hatchet, Windmill, Argo, Airflow, ...) cover the scheduling and queueing core — cron, queue, retries, heartbeats, cancellation. That is ~1,500 lines of this codebase. They cover none of the rest: the API, the artifact verification pipeline, running untrusted code, or the IGA credential boundary. Every engine assumes job code is trusted and deployed with the platform; here it is uploaded at runtime by the customer.
+
+| Candidate | Verdict |
+|---|---|
+| Temporal (self-hosted) | One cluster per customer (customers can't share infrastructure) — too much to operate |
+| Temporal Cloud | Workable (namespace per customer; cost and vendor exposure are fine) — but SEC-7 checks the dispatch claim on *every* job IGA call, which needs the run state in our own Postgres; and it replaces only the scheduling core |
+| Windmill | Closest overlap, but AGPL, and it hands secrets to the running script — the exact thing this system prevents |
+| Hatchet | Right shape at the start of the project; a sideways move now |
+| Argo Workflows | Needs Kubernetes; noted for later — pod-per-job is the isolation SEC-4 still lacks |
+| Airflow / Dagster / Prefect | DAGs are trusted platform code — wrong trust model |
+| pg-boss / BullMQ / Graphile | Replace only the claim logic; we'd give up control of the fencing behavior |
+
+The decision comes down to: the scheduling core already works, and SEC-1 + SEC-7 together require run state to live in our own database anyway. Revisit if runs ever need to survive worker loss or resume mid-flight (COR-4/COR-5) — the path then is Temporal Cloud, one namespace per customer. Full analysis: `docs/adr/0024-build-vs-foss-rationale.md`.
 
 ## Modes
 
@@ -13,7 +31,7 @@ Supports **JavaScript (Node 22)** and **Python (3.11 / 3.12)** job runtimes.
 
 `npm start` reads `APP_MODE` from the environment (default: `production`).
 
-PingOne / AIC OAuth is active in both modes — you need a real PingOne or AIC environment and a valid token to call the public API.
+AIC OAuth is active in both modes — you need a real AIC environment and a valid token to call the public API.
 
 ## Quick start (local mode)
 
@@ -95,7 +113,7 @@ src/
 ├── config/                   Config loader + production validation
 ├── elasticsearch/            Index mapping definitions
 ├── iga/                      IGA API client + token manager
-├── middleware/               publicAuth (PingOne/AIC), internalAuth (Google OIDC)
+├── middleware/               publicAuth (AIC), internalAuth (Google OIDC)
 ├── routes/                   Express routers (public + internal)
 ├── runtime/                  JS JobContext, parameters, result model
 ├── sdk/                      scheduler-sdk.js injected into JS job child processes
@@ -186,7 +204,7 @@ Copy `.env.example` as a starting point.
 | `IGA_CLIENT_ID` | IGA client ID |
 | `IGA_CLIENT_SECRET` | IGA client secret (or Secret Manager reference `projects/...`) |
 | `IGA_BASE_URL` | IGA API base URL |
-| `PUBLIC_API_ALGORITHMS` | Optional, comma-separated JWT algorithm allowlist (default `RS256,ES256,PS256` — covers both PingOne and AIC) |
+| `PUBLIC_API_ALGORITHMS` | Optional, comma-separated JWT algorithm allowlist (default `RS256,ES256,PS256`) |
 
 Dispatch is pull-based: the worker polls Postgres directly and has no `/execute` endpoint, so there's no `RUNTIME_WORKER_URL`/worker-invoker-audience pair to configure for that path. `GCP_PROJECT_ID`, `JOB_ZIP_BUCKET`, `ES_ENDPOINT`, and `ES_API_KEY` must be set on **both** the scheduler and worker Cloud Run services — the worker needs Elasticsearch access itself now, as a fallback for the rare run whose definition wasn't snapshotted at tick time.
 
@@ -197,17 +215,9 @@ Dispatch is pull-based: the worker polls Postgres directly and has no `/execute`
 | `PYTHON311_BIN` | Full path to `python3.11` if not on `PATH` (e.g. pyenv) |
 | `PYTHON312_BIN` | Full path to `python3.12` if not on `PATH` |
 
-## Choosing an authorization server
+## Authorization server
 
-Set `PUBLIC_API_ISSUER` to the issuer URL of whichever product your organization has licensed. The middleware auto-discovers the JWKS URL via OIDC discovery (`<issuer>/.well-known/openid-configuration`).
-
-**PingOne (classic)**
-
-```
-PUBLIC_API_ISSUER=https://auth.pingone.com/<env-id>/as
-```
-
-**PingOne Advanced Identity Cloud (AIC)**
+The public API is secured against a PingOne Advanced Identity Cloud (AIC) tenant — a single-tenant environment; each customer's AIC tenant is its own authorization server. Set `PUBLIC_API_ISSUER` to that tenant's issuer URL. The middleware auto-discovers the JWKS URL via OIDC discovery (`<issuer>/.well-known/openid-configuration`).
 
 ```
 PUBLIC_API_ISSUER=https://<tenant>.forgeblocks.com/am/oauth2/<realm>
@@ -422,6 +432,6 @@ curl -s http://localhost:3000/job-runs/<runId> \
 
 - `docs/architecture.md` — full request-flow diagrams (tick, pull-worker claim/execute/heartbeat, IGA proxy, CI/CD)
 - `docs/runbook.md` — full operator runbook (local dev, production deploy, troubleshooting)
-- `docs/adr/` — architecture decisions, one per significant change (Postgres-as-queue, PingOne auth, pull-worker execution model, and more)
+- `docs/adr/` — architecture decisions, one per significant change (Postgres-as-queue, public-API auth, pull-worker execution model, and more)
 - `docs/bug-log.md` — the project's security/correctness/availability review log — what's been found, fixed, and why some items were closed as won't-fix
 - `terraform/README.md` — Terraform variables reference

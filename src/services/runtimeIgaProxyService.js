@@ -52,7 +52,7 @@ export class RuntimeIgaProxyService {
     return this._auditIndex;
   }
 
-  async request({ runId, method, path, body, principal }) {
+  async request({ runId, dispatchId, method, path, body, principal }) {
     if (!this.enabled) throw this.badRequest("RUNTIME_IGA_PROXY_DISABLED", "runtime IGA proxy is disabled", 403);
     if (!runId || typeof runId !== "string") throw this.badRequest("RUN_ID_REQUIRED", "runId is required");
 
@@ -63,6 +63,12 @@ export class RuntimeIgaProxyService {
     const run = await this.getRun(runId);
     if (!run) throw this.badRequest("RUN_NOT_FOUND", "run not found", 404);
     if (run.state !== "RUNNING") throw this.badRequest("RUN_NOT_RUNNING", `run ${runId} is ${run.state}; IGA requests are only allowed while RUNNING`, 409);
+    // Binds the proxy call to the specific dispatch attempt that spawned the
+    // caller (SEC-7) -- run.dispatchId is only ever absent for run stores
+    // that don't mint one (e.g. local dev), where this check is a no-op.
+    if (run.dispatchId && dispatchId !== run.dispatchId) {
+      throw this.badRequest("IGA_RUN_DISPATCH_MISMATCH", `dispatchId does not match the current dispatch for run ${runId}`, 403);
+    }
 
     const startedAt = this.now().toISOString();
     await this.emitAuditEvent({

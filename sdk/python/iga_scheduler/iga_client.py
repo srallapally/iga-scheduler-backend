@@ -10,6 +10,7 @@ class BrokerIgaClient:
     def __init__(self):
         self._broker_url = os.environ["IGA_BROKER_URL"]
         self._run_id = os.environ.get("IGA_SCHEDULER_RUN_ID")
+        self._dispatch_id = os.environ.get("IGA_SCHEDULER_DISPATCH_ID")
         self._token = None
         self._token_exp = 0
 
@@ -39,7 +40,7 @@ class BrokerIgaClient:
         token = self._get_token()
         resp = requests.post(
             self._broker_url,
-            json={"runId": self._run_id, "method": method, "path": path, "body": body},
+            json={"runId": self._run_id, "dispatchId": self._dispatch_id, "method": method, "path": path, "body": body},
             headers={"Authorization": f"Bearer {token}"},
             timeout=30,
         )
@@ -48,7 +49,7 @@ class BrokerIgaClient:
             token = self._get_token()
             resp = requests.post(
                 self._broker_url,
-                json={"runId": self._run_id, "method": method, "path": path, "body": body},
+                json={"runId": self._run_id, "dispatchId": self._dispatch_id, "method": method, "path": path, "body": body},
                 headers={"Authorization": f"Bearer {token}"},
                 timeout=30,
             )

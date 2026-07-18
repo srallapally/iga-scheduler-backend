@@ -108,6 +108,17 @@ describe("POST /execute", () => {
     expect(onExecutionSuccess).toHaveBeenCalledWith({ runId: "run-1", dispatchId: "dispatch-abc", result });
   });
 
+  it("threads dispatchId through to executor.execute (SEC-7)", async () => {
+    const executor = makeExecutor();
+    const app = createWorkerApp({ executor, authMiddleware: noopAuth });
+    await request(app).post("/execute").send({ ...VALID_BODY, dispatchId: "dispatch-abc" });
+    await vi.waitFor(() => expect(executor.execute).toHaveBeenCalledOnce());
+    expect(executor.execute).toHaveBeenCalledWith(expect.objectContaining({
+      runId: "run-1",
+      dispatchId: "dispatch-abc"
+    }));
+  });
+
   it("threads dispatchId through to onExecutionError (COR-1)", async () => {
     const err = new Error("execution boom");
     const executor = { execute: vi.fn(() => Promise.reject(err)) };

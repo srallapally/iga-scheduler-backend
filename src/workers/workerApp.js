@@ -61,7 +61,7 @@ export function createWorkerApp({
 
     res.status(202).json({ status: "accepted", runId });
 
-    const promise = executor.execute({ runId, run: { runId }, execution, context })
+    const promise = executor.execute({ runId, dispatchId, run: { runId }, execution, context })
       .then(async (result) => {
         if (onExecutionSuccess) {
           try {

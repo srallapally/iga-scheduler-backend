@@ -21,6 +21,7 @@ export function createInternalRuntimeIgaRouter(options = {}) {
     try {
       const result = await getService().request({
         runId: req.body?.runId,
+        dispatchId: req.body?.dispatchId,
         method: req.body?.method,
         path: req.body?.path,
         body: req.body?.body,

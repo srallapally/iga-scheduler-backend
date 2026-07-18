@@ -26,12 +26,13 @@ describe("internal runtime IGA route", () => {
 
     const response = await request(createTestApp(service))
       .post("/internal/runtime/iga/request")
-      .send({ runId: "run-1", method: "GET", path: "/iga/governance/applications" });
+      .send({ runId: "run-1", dispatchId: "dispatch-abc", method: "GET", path: "/iga/governance/applications" });
 
     expect(response.status).toBe(200);
     expect(response.body).toEqual({ ok: true, method: "GET", path: "/iga/governance/applications", result: { items: [] } });
     expect(service.request).toHaveBeenCalledWith({
       runId: "run-1",
+      dispatchId: "dispatch-abc",
       method: "GET",
       path: "/iga/governance/applications",
       body: undefined,

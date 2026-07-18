@@ -33,11 +33,31 @@ class TestBrokerIgaClient:
 
         mock_post.assert_called_once_with(
             "https://broker.example.com",
-            json={"runId": "run-123", "method": "POST", "path": "/scheduler/risk-scores/recompute", "body": {"key": "val"}},
+            json={"runId": "run-123", "dispatchId": None, "method": "POST", "path": "/scheduler/risk-scores/recompute", "body": {"key": "val"}},
             headers={"Authorization": "Bearer tok"},
             timeout=30,
         )
         assert result == {"requestId": "req-1"}
+
+    def test_execute_includes_dispatch_id_when_set(self, monkeypatch):
+        monkeypatch.setenv("IGA_SCHEDULER_DISPATCH_ID", "dispatch-abc")
+        client = make_broker_client(monkeypatch)
+        client._token = "tok"
+        client._token_exp = 9999999999
+
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {"requestId": "req-1"}
+
+        with patch("iga_scheduler.iga_client.requests.post", return_value=mock_resp) as mock_post:
+            client.execute("GET", "/scheduler/risk-scores", None)
+
+        mock_post.assert_called_once_with(
+            "https://broker.example.com",
+            json={"runId": "run-123", "dispatchId": "dispatch-abc", "method": "GET", "path": "/scheduler/risk-scores", "body": None},
+            headers={"Authorization": "Bearer tok"},
+            timeout=30,
+        )
 
     def test_execute_retries_once_on_401(self, monkeypatch):
         client = make_broker_client(monkeypatch)

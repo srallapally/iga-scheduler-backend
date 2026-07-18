@@ -180,4 +180,46 @@ describe("WorkerRunService", () => {
     expect(result.state).toBe("SUCCEEDED");
     expect(logger.warn).toHaveBeenCalledWith("worker audit emit failed", expect.objectContaining({ error: "audit unavailable" }));
   });
+
+  describe("executeClaimedRun (AVL-1 residual — pull-worker poll loop entry point)", () => {
+    it("runs the full pipeline for a run already claimed elsewhere, without re-claiming", async () => {
+      const run = queuedRun({ state: "RUNNING", params: { window: { type: "string", value: "PT1H" } } });
+      const runStore = createRunStore(run);
+      const esClient = createMockEsClient();
+      const runtimeExecutor = createRuntimeExecutor({ status: "completed", runId: "run-1" });
+      const parameterResolver = createParameterResolver({ window: "PT1H" });
+      const service = new WorkerRunService({ esClient, runStore, storage: {}, definitionsIndex: TEST_DEFINITIONS_INDEX, auditIndex: "scheduler_audit_v1", runtimeExecutor, parameterResolver, now: fixedClock("2026-06-03T18:01:00.000Z", "2026-06-03T18:01:05.000Z") });
+      stubArtifactVerification(service);
+
+      const result = await service.executeClaimedRun({ runId: "run-1", dispatchId: "dispatch-from-batch-claim" });
+
+      expect(result.status).toBe("completed");
+      expect(result.state).toBe("SUCCEEDED");
+      expect(runStore.claimRun).not.toHaveBeenCalled();
+      expect(runtimeExecutor.execute).toHaveBeenCalledWith(expect.objectContaining({ runId: "run-1", dispatchId: "dispatch-from-batch-claim" }));
+      expect(runStore.markSucceeded).toHaveBeenCalledWith(expect.objectContaining({ runId: "run-1", dispatchId: "dispatch-from-batch-claim" }));
+    });
+
+    it("fences markFailed to the given dispatchId when execution throws", async () => {
+      const run = queuedRun({ state: "RUNNING" });
+      const runStore = createRunStore(run);
+      const esClient = createMockEsClient();
+      const runtimeExecutor = { execute: vi.fn(async () => { throw new Error("boom"); }) };
+      const service = new WorkerRunService({ esClient, runStore, storage: {}, definitionsIndex: TEST_DEFINITIONS_INDEX, auditIndex: "scheduler_audit_v1", runtimeExecutor, parameterResolver: createParameterResolver(), now: fixedClock("2026-06-03T18:01:00.000Z", "2026-06-03T18:01:05.000Z") });
+      stubArtifactVerification(service);
+
+      await expect(service.executeClaimedRun({ runId: "run-1", dispatchId: "dispatch-xyz" })).rejects.toThrow("boom");
+      expect(runStore.markFailed).toHaveBeenCalledWith(expect.objectContaining({ runId: "run-1", dispatchId: "dispatch-xyz" }));
+    });
+
+    it("returns skipped for a runId no longer present", async () => {
+      const runStore = createRunStore(null);
+      const esClient = createMockEsClient();
+      const service = new WorkerRunService({ esClient, runStore, storage: {}, definitionsIndex: TEST_DEFINITIONS_INDEX, auditIndex: "scheduler_audit_v1", parameterResolver: createParameterResolver() });
+
+      const result = await service.executeClaimedRun({ runId: "vanished-run", dispatchId: "dispatch-1" });
+
+      expect(result).toEqual({ status: "skipped", runId: "vanished-run", state: "UNKNOWN", message: "Run is UNKNOWN; worker execution was not started" });
+    });
+  });
 });

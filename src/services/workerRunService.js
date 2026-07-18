@@ -267,7 +267,24 @@ export class WorkerRunService {
   async executeRunLocallyInternal({ runId }) {
     const { run, startedAt, claim } = await this.claimQueuedRun({ runId });
     if (!claim.claimed) return this.skippedResult({ runId, state: claim.state || "UNKNOWN" });
+    return this._runClaimedLocally({ run, startedAt });
+  }
 
+  // Runs the full in-process pipeline (metadata, trust, secrets, execute,
+  // complete) for a run that's already been claimed elsewhere -- the pull
+  // worker's poll loop claims a batch atomically via RunStore.claimNextQueued
+  // (AVL-1 residual) and drives each claimed run through this entry point
+  // instead of executeRunLocallyInternal's own single-run claim, since the
+  // row is already RUNNING with a known dispatch_id by the time this runs.
+  async executeClaimedRun({ runId, dispatchId }) {
+    const startedAt = this.now().toISOString();
+    const fetched = await this.getRun(runId);
+    if (!fetched) return this.skippedResult({ runId, state: "UNKNOWN" });
+    return this._runClaimedLocally({ run: { ...fetched, dispatchId }, startedAt });
+  }
+
+  async _runClaimedLocally({ run, startedAt }) {
+    const runId = run.runId;
     try {
       const execution = await this.buildExecutionMetadata({ run });
       await this.emitAuditEvent(this.buildWorkerAuditEvent({
@@ -306,6 +323,7 @@ export class WorkerRunService {
       const params = await this.resolveRuntimeParameters({ run });
       const result = await this.runtimeExecutor.execute({
         runId,
+        dispatchId: run.dispatchId,
         run,
         execution,
         artifactBuffer: execution.artifact.verification.buffer,

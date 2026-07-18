@@ -115,32 +115,4 @@ describe("createApp", () => {
     expect(response.body).not.toHaveProperty("esConnected");
   });
 
-  it("passes the injected workerRunService to the internal worker router", async () => {
-    const workerRunService = {
-      executeRun: vi.fn(async ({ runId }) => ({ status: "dispatched", runId, state: "RUNNING" }))
-    };
-    const verifyToken = vi.fn(async () => ({
-      aud: "https://worker.example.internal",
-      email: "worker@example.iam.gserviceaccount.com"
-    }));
-    const app = createTestApp({
-      workerRunService,
-      internalWorkerOptions: {
-        auth: {
-          expectedAudience: "https://worker.example.internal",
-          expectedServiceAccountEmail: "worker@example.iam.gserviceaccount.com",
-          verifyToken
-        }
-      }
-    });
-
-    const response = await request(app)
-      .post("/internal/job-runs/run-1/execute")
-      .set("authorization", "Bearer token-1")
-      .send({});
-
-    expect(response.status).toBe(202);
-    expect(response.body).toEqual({ status: "dispatched", runId: "run-1", state: "RUNNING" });
-    expect(workerRunService.executeRun).toHaveBeenCalledWith({ runId: "run-1" });
-  });
 });

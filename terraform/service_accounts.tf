@@ -61,16 +61,11 @@ resource "google_storage_bucket_iam_member" "scheduler_service_gcs" {
   member = "serviceAccount:${google_service_account.scheduler_service.email}"
 }
 
-# WorkerServiceRuntimeLauncher POSTs { runId, execution, context } to the worker
-# service's /execute endpoint using an OIDC token from the GCP metadata server.
-# roles/run.invoker on the specific worker service (not project-wide) is sufficient.
-resource "google_cloud_run_v2_service_iam_member" "scheduler_service_invoke_worker" {
-  project  = var.project_id
-  location = var.region
-  name     = google_cloud_run_v2_service.worker.name
-  role     = "roles/run.invoker"
-  member   = "serviceAccount:${google_service_account.scheduler_service.email}"
-}
+# scheduler_service_invoke_worker (roles/run.invoker, scheduler SA -> worker
+# service) removed here: dispatch is pull-based now (AVL-1 residual) -- the
+# worker polls Postgres itself instead of the scheduler pushing over HTTP to
+# /execute, so no inbound invocation from the scheduler to the worker is
+# needed anymore. See docs/adr/0019-pull-worker-execution-model.md.
 
 # ── runtime: secrets + GCS read + callback invocation ─────────────────────────
 

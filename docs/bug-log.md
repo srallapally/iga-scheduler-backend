@@ -23,7 +23,7 @@ Priority legend:
 | COR-2 | P1 | Cancellation records CANCELLED while side effects fully execute | Correctness / audit integrity | Verified | **Resolved** — this PR, ADR 0015. Real cancellation implemented (not just documented as a gap) |
 | COR-3 | P1 | Definition version hardcoded to 1; re-upload swaps code under a pinned version | Change control | Verified | **Resolved** — this PR, ADR 0013. `LocalDefinitionService` has the same pattern, left untouched (local-dev only) |
 | AVL-1 | P1 | Worker runs jobs as fire-and-forget subprocess; killed on every deploy/scale-in | Availability / lifecycle | By inspection | Open |
-| AVL-2 | P1 | ES on the dispatch hot path; ES blip permanently fails in-flight dispatches | Availability | By inspection | Open |
+| AVL-2 | P1 | ES on the dispatch hot path; ES blip permanently fails in-flight dispatches | Availability | Verified | **Resolved** — this PR, ADR 0016. COR-4 (dead retry-classification machinery) remains a separate, unaddressed gap |
 | AVL-3 | P1 | Scheduler service lacks always-on CPU; dispatch/sweep loops stall to tick cadence | Availability | Verified | **Resolved** — this PR, ADR 0011 |
 | CIP-1 | P1 | CI runs no tests | CI / process | Verified | **Resolved** — this PR, ADR 0010. CIP-2 (hermetic PG-backed CI so the 28 skipped tests run) remains a separate follow-on |
 | SEC-5 | P2 | `publicAuth` trusts JWT-header `alg`, nullifying algorithm allowlist | Security / defense-in-depth | By inspection | Open |
@@ -103,10 +103,11 @@ Priority legend:
 **What:** Cloud Run gives ~10s SIGTERM grace; `maxDrainMs` (~1830s) is unachievable. Every deploy/scale-in kills in-flight jobs, which sit RUNNING until the sweeper fails them (up to the threshold). Fast 202s also break autoscaling signal (request concurrency ≈ 0), and there is no worker-side concurrency cap — `maxLocalConcurrency` lives in `WorkerRunService`, which the worker service does not use. Python jobs get no memory cap (`resolveSpawnCommand` sets `--max-old-space-size` for Node only).
 **Fix (strategic):** Move to pull-worker (worker polls `job_runs` for QUEUED with `FOR UPDATE SKIP LOCKED`), or Cloud Run Jobs per run for real per-job isolation and task timeouts. Either deletes the `/execute` hop and this whole failure class.
 
-### AVL-2 — ES on the dispatch hot path
+### AVL-2 — ES on the dispatch hot path — **Resolved**
 **Where:** `WorkerRunService.buildExecutionMetadata` fetches the definition from ES per dispatch; failure → `markFailed`, no auto-retry (COR-4).
 **What:** Contradicts the ES-out-of-coordination constraint; an ES blip permanently fails every dispatch during it.
 **Fix:** Snapshot artifact metadata (uri, sha256, generation, entrypoint, runtime) into the run row at tick time; the row already pins `definition_version`.
+**Resolution:** New `job_runs.execution_metadata` jsonb column (migration `002_run_execution_metadata.sql`). `SchedulerTickService` takes an optional `definitionService`; when configured (wired in production `src/app.js`), it fetches the definition once per due instance at tick time and snapshots it onto the run row — a missing/inactive/version-mismatched definition doesn't block run creation, it's still snapshotted as-is so dispatch fails with the same error code as before; only a genuine ES fetch error fails that one instance for that tick (self-healing next tick, since `next_fire_at` wasn't advanced). `WorkerRunService.buildExecutionMetadata` reads the snapshot when present — zero ES calls on the dispatch hot path — falling back to the original live lookup when absent (legacy runs, local dev). See `docs/adr/0016-execution-metadata-snapshot.md`. **Residual:** COR-4 (retry-classification machinery exists but nothing requeues) remains open and unaddressed — a definition-related dispatch failure is still `markFailed` unconditionally either way.
 
 ### AVL-3 — Scheduler service background loops not guaranteed CPU — **Resolved**
 **Where:** `cloudbuild.yaml` scheduler deploy step lacks `--min-instances`/`--no-cpu-throttling` (the worker step at :127-128 has both).

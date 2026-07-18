@@ -47,7 +47,7 @@ export class RunControlService {
         fromStates: ["RUNNING"],
         set: { state: "CANCELLING", cancelRequestedAt: nowIso, cancelledBy, cancelReason: reason || "Run cancellation requested", updatedAt: nowIso, status: { phase: "cancelling", message: reason || "Run cancellation requested" } }
       });
-      if (updated) await this.cancelRuntimeExecution(run);
+      if (updated) await this.cancelRuntimeExecution(updated);
       return { status: "cancelling", action: "cancel", runId, state: "CANCELLING" };
     }
     await this.runStore.transition({
@@ -72,8 +72,31 @@ export class RunControlService {
   }
 
   async cancelRuntimeExecution(run) {
-    if (!this.runtimeLauncher?.cancel || !run.runtimeExecution?.executionId) return false;
-    await this.runtimeLauncher.cancel(run.runtimeExecution);
+    if (!this.runtimeLauncher?.cancel) return false;
+    let result;
+    try {
+      result = await this.runtimeLauncher.cancel(run);
+    } catch {
+      // Best-effort: the run is already recorded as CANCELLING; if the worker
+      // can't be reached right now, the stale-run sweeper's timeout remains
+      // the terminal backstop.
+      return false;
+    }
+    if (result?.status === "killed") {
+      const nowIso = this.now().toISOString();
+      await this.runStore.transition({
+        runId: run.runId,
+        fromStates: ["CANCELLING"],
+        set: {
+          state: "CANCELLED",
+          endedAt: nowIso,
+          heartbeatAt: nowIso,
+          cancelledAt: nowIso,
+          status: { phase: "cancelled", message: "Run cancelled — worker terminated the subprocess" },
+          error: { code: "RUN_CANCELLED", message: run.cancelReason || "Run cancelled by operator" }
+        }
+      });
+    }
     return true;
   }
 

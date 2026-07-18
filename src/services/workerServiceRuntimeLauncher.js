@@ -56,8 +56,30 @@ export class WorkerServiceRuntimeLauncher {
     };
   }
 
-  async cancel() {
-    return { status: "unsupported" };
+  async cancel({ runId }) {
+    const token = await this._getToken();
+    return this._cancel(runId, token, true);
+  }
+
+  async _cancel(runId, token, retryOn401) {
+    const res = await this._fetch(`${this.workerUrl}/cancel/${encodeURIComponent(runId)}`, {
+      method: "POST",
+      signal: AbortSignal.timeout(this.requestTimeoutMs),
+      headers: { Authorization: `Bearer ${token}` }
+    });
+
+    if (res.status === 401 && retryOn401) {
+      this._cachedToken = null;
+      const freshToken = await this._getToken();
+      return this._cancel(runId, freshToken, false);
+    }
+
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      throw new Error(`worker /cancel failed: HTTP ${res.status} ${text}`);
+    }
+
+    return res.json();
   }
 
   async getStatus() {

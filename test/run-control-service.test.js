@@ -51,15 +51,43 @@ describe("RunControlService", () => {
     }));
   });
 
-  it("moves running cancel to cancelling and invokes runtime launcher", async () => {
-    const runtimeExecution = { executionId: "exec-1", backend: "cloud-run-job" };
+  it("moves running cancel to cancelling and invokes runtime launcher, but stays CANCELLING when the worker can't confirm a kill (COR-2)", async () => {
+    const runtimeExecution = { backend: "cloud-run-job" };
     const runStore = createRunStore(run({ state: "RUNNING", runtimeExecution }));
-    const runtimeLauncher = { cancel: vi.fn(async () => ({})) };
+    const runtimeLauncher = { cancel: vi.fn(async () => ({ status: "not_found" })) };
     const service = new RunControlService({ runStore, runtimeLauncher, now: fixedClock() });
     const result = await service.cancelRun({ runId: "run-1", reason: "stop" });
     expect(result).toEqual({ status: "cancelling", action: "cancel", runId: "run-1", state: "CANCELLING" });
     expect(runStore.transition).toHaveBeenCalledWith(expect.objectContaining({ set: expect.objectContaining({ state: "CANCELLING", cancelReason: "stop" }) }));
-    expect(runtimeLauncher.cancel).toHaveBeenCalledWith(runtimeExecution);
+    expect(runtimeLauncher.cancel).toHaveBeenCalledWith(expect.objectContaining({ runId: "run-1", state: "CANCELLING" }));
+    expect(runStore.transition).toHaveBeenCalledTimes(1);
+    const finalRun = await runStore.getRun("run-1");
+    expect(finalRun.state).toBe("CANCELLING");
+  });
+
+  it("transitions CANCELLING straight to CANCELLED when the worker confirms the subprocess was killed (COR-2)", async () => {
+    const runStore = createRunStore(run({ state: "RUNNING" }));
+    const runtimeLauncher = { cancel: vi.fn(async () => ({ status: "killed" })) };
+    const service = new RunControlService({ runStore, runtimeLauncher, now: fixedClock() });
+    const result = await service.cancelRun({ runId: "run-1", reason: "stop" });
+    expect(result).toEqual({ status: "cancelling", action: "cancel", runId: "run-1", state: "CANCELLING" });
+    expect(runStore.transition).toHaveBeenCalledTimes(2);
+    expect(runStore.transition).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      runId: "run-1",
+      fromStates: ["CANCELLING"],
+      set: expect.objectContaining({ state: "CANCELLED", cancelledAt: "2026-06-03T18:02:00.000Z" })
+    }));
+    const finalRun = await runStore.getRun("run-1");
+    expect(finalRun.state).toBe("CANCELLED");
+  });
+
+  it("does not throw when the worker is unreachable — CANCELLING stands, sweeper remains the backstop", async () => {
+    const runStore = createRunStore(run({ state: "RUNNING" }));
+    const runtimeLauncher = { cancel: vi.fn(async () => { throw new Error("worker unreachable"); }) };
+    const service = new RunControlService({ runStore, runtimeLauncher, now: fixedClock() });
+    const result = await service.cancelRun({ runId: "run-1", reason: "stop" });
+    expect(result).toEqual({ status: "cancelling", action: "cancel", runId: "run-1", state: "CANCELLING" });
+    expect(runStore.transition).toHaveBeenCalledTimes(1);
   });
 
   it("treats repeated cancel as idempotent", async () => {

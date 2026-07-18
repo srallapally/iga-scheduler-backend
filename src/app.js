@@ -9,6 +9,7 @@ import { WorkerServiceRuntimeLauncher } from "./services/workerServiceRuntimeLau
 import { JobDefinitionService } from "./services/jobDefinitionService.js";
 import { JobInstanceService } from "./services/jobInstanceService.js";
 import { RunDispatcher } from "./services/runDispatcher.js";
+import { RunControlService } from "./services/runControlService.js";
 import { StaleRunSweeper } from "./services/staleRunSweeper.js";
 import { SchedulerTickService } from "./services/schedulerTickService.js";
 import { WorkerRunService } from "./services/workerRunService.js";
@@ -39,6 +40,9 @@ export async function startApplication({ pool: injectedPool } = {}) {
 
   const jobInstanceService = new JobInstanceService({ instanceStore });
   const jobDefinitionService = new JobDefinitionService({ instanceStore });
+  // Reuses the same launcher instance dispatch uses, so cancellation targets
+  // the same worker service (COR-2).
+  const runControlService = new RunControlService({ runStore, runtimeLauncher: isolatedRuntimeLauncher });
   const tickService = new SchedulerTickService({ instanceStore, runStore, pool });
   const dispatcher = new RunDispatcher({
     runStore,
@@ -70,6 +74,7 @@ export async function startApplication({ pool: injectedPool } = {}) {
     esClient,
     jobInstanceService,
     jobDefinitionService,
+    runControlService,
     internalSchedulerOptions: { service: tickService }
   });
 

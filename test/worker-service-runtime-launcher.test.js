@@ -19,7 +19,7 @@ function makeFetch(overrides = {}) {
     if (String(url).includes("metadata.google.internal")) {
       return { ok: true, status: 200, text: async () => TOKEN, ...overrides.metadata };
     }
-    return { ok: true, status: 202, text: async () => "", ...overrides.worker };
+    return { ok: true, status: 202, text: async () => "", json: async () => ({ status: "killed" }), ...overrides.worker };
   });
 }
 
@@ -130,11 +130,60 @@ describe("WorkerServiceRuntimeLauncher", () => {
       .rejects.toThrow("HTTP 503");
   });
 
-  it("cancel and getStatus return unsupported", async () => {
+  it("getStatus returns unsupported", async () => {
     const launcher = new WorkerServiceRuntimeLauncher({
       workerUrl: WORKER_URL, runtimeServiceAccount: SERVICE_ACCOUNT, fetchImpl: makeFetch()
     });
-    expect(await launcher.cancel()).toEqual({ status: "unsupported" });
     expect(await launcher.getStatus()).toEqual({ status: "unsupported" });
+  });
+
+  it("cancel POSTs to worker /cancel/:runId and returns the worker's response (COR-2)", async () => {
+    const fetchImpl = makeFetch({ worker: { json: async () => ({ status: "killed" }) } });
+    const launcher = new WorkerServiceRuntimeLauncher({
+      workerUrl: WORKER_URL, runtimeServiceAccount: SERVICE_ACCOUNT, fetchImpl
+    });
+
+    const result = await launcher.cancel({ runId: "run-1" });
+
+    expect(result).toEqual({ status: "killed" });
+    const cancelCall = fetchImpl.mock.calls.find(c => String(c[0]).includes("/cancel/"));
+    expect(cancelCall[0]).toBe(`${WORKER_URL}/cancel/run-1`);
+    expect(cancelCall[1].method).toBe("POST");
+    expect(cancelCall[1].headers.Authorization).toBe(`Bearer ${TOKEN}`);
+  });
+
+  it("cancel returns not_found when the worker has no tracked execution for the run", async () => {
+    const fetchImpl = makeFetch({ worker: { json: async () => ({ status: "not_found" }) } });
+    const launcher = new WorkerServiceRuntimeLauncher({
+      workerUrl: WORKER_URL, runtimeServiceAccount: SERVICE_ACCOUNT, fetchImpl
+    });
+
+    expect(await launcher.cancel({ runId: "run-1" })).toEqual({ status: "not_found" });
+  });
+
+  it("cancel retries once on 401 with a fresh token", async () => {
+    let workerCalls = 0;
+    const fetchImpl = vi.fn(async (url) => {
+      if (String(url).includes("metadata.google.internal")) return { ok: true, status: 200, text: async () => TOKEN };
+      workerCalls++;
+      if (workerCalls === 1) return { ok: false, status: 401, text: async () => "expired" };
+      return { ok: true, status: 202, json: async () => ({ status: "killed" }) };
+    });
+    const launcher = new WorkerServiceRuntimeLauncher({
+      workerUrl: WORKER_URL, runtimeServiceAccount: SERVICE_ACCOUNT, fetchImpl
+    });
+
+    const result = await launcher.cancel({ runId: "run-1" });
+    expect(result).toEqual({ status: "killed" });
+    expect(workerCalls).toBe(2);
+  });
+
+  it("cancel throws on a non-ok, non-401 response", async () => {
+    const fetchImpl = makeFetch({ worker: { ok: false, status: 503, text: async () => "unavailable" } });
+    const launcher = new WorkerServiceRuntimeLauncher({
+      workerUrl: WORKER_URL, runtimeServiceAccount: SERVICE_ACCOUNT, fetchImpl
+    });
+
+    await expect(launcher.cancel({ runId: "run-1" })).rejects.toThrow("HTTP 503");
   });
 });

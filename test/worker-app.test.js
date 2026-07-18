@@ -128,6 +128,34 @@ describe("POST /execute", () => {
   });
 });
 
+describe("POST /cancel/:runId (COR-2)", () => {
+  it("delegates to executor.cancel and returns its result", async () => {
+    const executor = { ...makeExecutor(), cancel: vi.fn(() => ({ status: "killed" })) };
+    const app = createWorkerApp({ executor, authMiddleware: noopAuth });
+    const res = await request(app).post("/cancel/run-1");
+    expect(res.status).toBe(202);
+    expect(res.body).toEqual({ runId: "run-1", status: "killed" });
+    expect(executor.cancel).toHaveBeenCalledWith("run-1");
+  });
+
+  it("returns not_found when the executor has no tracked execution for the run", async () => {
+    const executor = { ...makeExecutor(), cancel: vi.fn(() => ({ status: "not_found" })) };
+    const app = createWorkerApp({ executor, authMiddleware: noopAuth });
+    const res = await request(app).post("/cancel/unknown-run");
+    expect(res.status).toBe(202);
+    expect(res.body).toEqual({ runId: "unknown-run", status: "not_found" });
+  });
+
+  it("is gated by the auth middleware", async () => {
+    const executor = { ...makeExecutor(), cancel: vi.fn(() => ({ status: "killed" })) };
+    const denyAuth = (_req, res) => res.status(401).json({ error: "missing bearer token" });
+    const app = createWorkerApp({ executor, authMiddleware: denyAuth });
+    const res = await request(app).post("/cancel/run-1");
+    expect(res.status).toBe(401);
+    expect(executor.cancel).not.toHaveBeenCalled();
+  });
+});
+
 describe("GET /health", () => {
   it("returns 200 without auth", async () => {
     const app = createWorkerApp({ executor: makeExecutor(), authMiddleware: noopAuth });

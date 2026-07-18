@@ -24,7 +24,7 @@ Priority legend:
 | COR-3 | P1 | Definition version hardcoded to 1; re-upload swaps code under a pinned version | Change control | Verified | Open |
 | AVL-1 | P1 | Worker runs jobs as fire-and-forget subprocess; killed on every deploy/scale-in | Availability / lifecycle | By inspection | Open |
 | AVL-2 | P1 | ES on the dispatch hot path; ES blip permanently fails in-flight dispatches | Availability | By inspection | Open |
-| AVL-3 | P1 | Scheduler service lacks always-on CPU; dispatch/sweep loops stall to tick cadence | Availability | Verified | Open |
+| AVL-3 | P1 | Scheduler service lacks always-on CPU; dispatch/sweep loops stall to tick cadence | Availability | Verified | **Resolved** — this PR, ADR 0011 |
 | CIP-1 | P1 | CI runs no tests | CI / process | Verified | **Resolved** — this PR, ADR 0010. CIP-2 (hermetic PG-backed CI so the 28 skipped tests run) remains a separate follow-on |
 | SEC-5 | P2 | `publicAuth` trusts JWT-header `alg`, nullifying algorithm allowlist | Security / defense-in-depth | By inspection | Open |
 | COR-4 | P2 | No automatic retry despite full retry-classification machinery | Correctness | By inspection | Open |
@@ -104,10 +104,11 @@ Priority legend:
 **What:** Contradicts the ES-out-of-coordination constraint; an ES blip permanently fails every dispatch during it.
 **Fix:** Snapshot artifact metadata (uri, sha256, generation, entrypoint, runtime) into the run row at tick time; the row already pins `definition_version`.
 
-### AVL-3 — Scheduler service background loops not guaranteed CPU
+### AVL-3 — Scheduler service background loops not guaranteed CPU — **Resolved**
 **Where:** `cloudbuild.yaml` scheduler deploy step lacks `--min-instances`/`--no-cpu-throttling` (the worker step at :127-128 has both).
 **What:** Dispatcher 5s poll and sweeper execute only during request handling → degrade to once-per-minute tick cadence; the service can scale to zero, making the control loop's liveness depend on incidental traffic.
 **Fix:** Add `--min-instances=1 --no-cpu-throttling` to the scheduler deploy, or externalize the loops.
+**Resolution:** `--min-instances=1 --no-cpu-throttling` added to the scheduler's `gcloud run deploy` step in `cloudbuild.yaml`, mirroring the worker step. Deploy-config-only change, no code touched. See `docs/adr/0011-scheduler-min-instances.md`.
 
 ### CIP-1 — CI runs no tests — **Resolved**
 **Where:** `cloudbuild.yaml` (terraform → docker build → migrate → deploy; no test step). `npm test` exists only as a CLAUDE.md session rule.

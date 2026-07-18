@@ -134,6 +134,17 @@ gcloud storage buckets add-iam-policy-binding gs://<bucket> \
 # Secret Manager
 gcloud projects add-iam-policy-binding $PROJECT \
   --member="serviceAccount:$SA" --role="roles/secretmanager.secretAccessor"
+# This grants project-wide secretAccessor, so $SA can physically read the
+# platform secrets below (DB_PASSWORD, IGA_CLIENT_ID/SECRET, ES_API_KEY,
+# GitHub token) in addition to job-parameter secrets. The app layer refuses
+# any sensitive job parameter that references those platform secrets or a
+# secret outside the SECRET_PARAM_PREFIX namespace (see .env.example), but
+# that is a soft control — the scoped-SA hardening (job-parameter secrets
+# only) is a tracked follow-on, not done here.
+#
+# Create job-parameter secrets with the SECRET_PARAM_PREFIX (default
+# job-param-), e.g.:
+#   gcloud secrets create job-param-salesforce-api-key --project=$PROJECT
 
 # Cloud Run Jobs (to launch job runtime)
 gcloud projects add-iam-policy-binding $PROJECT \

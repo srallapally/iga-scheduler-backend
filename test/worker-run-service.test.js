@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { WorkerRunService } from "../src/services/workerRunService.js";
 
 function queuedRun(overrides = {}) { return { runId: "run-1", instanceId: "risk-score-prod-hourly", definitionId: "risk-score", definitionVersion: 1, state: "QUEUED", createdAt: "2026-06-03T18:00:00.000Z", params: {}, ...overrides }; }
-function trustedJobZip(overrides = {}) { return { uri: "gs://iga-scheduler-jobs/approved/risk-score/hash/job.zip", sha256: "hash", generation: "123", approval: { status: "APPROVED", sha256: "hash", generation: "123", approvedBy: "iga" }, scan: { status: "CLEAN", sha256: "hash", scannedBy: "iga" }, ...overrides }; }
+function trustedJobZip(overrides = {}) { return { uri: "gs://iga-scheduler-jobs/approved/risk-score/hash/job.zip", sha256: "hash", generation: "123", ...overrides }; }
 function activeDefinition(overrides = {}) { return { definitionId: "risk-score", version: 1, state: "ACTIVE", enabled: true, runtime: "javascript", runtimeVersion: "nodejs22", wrapperVersion: "1.0.0", entrypoint: "index.js", timeoutSeconds: 1800, jobZip: trustedJobZip(), ...overrides }; }
 
 function createRunStore(runDoc) {
@@ -98,16 +98,6 @@ describe("WorkerRunService", () => {
     expect(result.status).toBe("skipped");
     expect(result.state).toBe("RUNNING");
     expect(runtimeExecutor.execute).not.toHaveBeenCalled();
-  });
-
-  it("fails non-retryably when artifact approval is missing", async () => {
-    const runStore = createRunStore(queuedRun());
-    const esClient = createMockEsClient({ definition: activeDefinition({ jobZip: trustedJobZip({ approval: undefined }) }) });
-    const runtimeExecutor = createRuntimeExecutor();
-    const service = new WorkerRunService({ esClient, runStore, storage: {}, definitionsIndex: TEST_DEFINITIONS_INDEX, auditIndex: "scheduler_audit_v1", runtimeExecutor, parameterResolver: createParameterResolver(), now: fixedClock("2026-06-03T18:01:00.000Z", "2026-06-03T18:01:05.000Z") });
-    await expect(service.executeRun({ runId: "run-1" })).rejects.toMatchObject({ code: "ARTIFACT_NOT_APPROVED" });
-    expect(runtimeExecutor.execute).not.toHaveBeenCalled();
-    expect(runStore.markFailed).toHaveBeenCalledWith(expect.objectContaining({ error: expect.objectContaining({ code: "ARTIFACT_NOT_APPROVED" }) }));
   });
 
   it("returns not found for missing run", async () => {

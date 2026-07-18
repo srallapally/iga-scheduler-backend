@@ -187,6 +187,46 @@ describe("JobRuntimeExecutor", () => {
       else process.env.RUNTIME_BROKER_URL = originalBrokerUrl;
     }
   });
+
+  it("never forwards direct IGA credentials to the Node child process env (SEC-1)", async () => {
+    const executor = createExecutor();
+    const capturedEnvs = [];
+    const origSpawn = executor._spawnEntrypoint.bind(executor);
+    executor._spawnEntrypoint = (opts) => { capturedEnvs.push(opts.extraEnv); return origSpawn(opts); };
+
+    const originalEnv = {
+      RUNTIME_BROKER_URL: process.env.RUNTIME_BROKER_URL,
+      IGA_CLIENT_ID: process.env.IGA_CLIENT_ID,
+      IGA_CLIENT_SECRET: process.env.IGA_CLIENT_SECRET,
+      IGA_TOKEN_ENDPOINT: process.env.IGA_TOKEN_ENDPOINT,
+      IGA_BASE_URL: process.env.IGA_BASE_URL
+    };
+    process.env.RUNTIME_BROKER_URL = "https://broker.test.example.com";
+    process.env.IGA_CLIENT_ID = "leaked-client-id";
+    process.env.IGA_CLIENT_SECRET = "leaked-client-secret";
+    process.env.IGA_TOKEN_ENDPOINT = "https://iga.test.example.com/oauth2/token";
+    process.env.IGA_BASE_URL = "https://iga.test.example.com";
+    try {
+      await executor.executeNodeEntrypoint({
+        runId: "run-1",
+        execution: { definition: { runtime: "javascript", runtimeVersion: "nodejs22", entrypoint: "index.js" } },
+        extracted: { extractDir: "/tmp", entrypointPath: "index.js", cleanup: async () => {} },
+        contextFilePath: "/tmp/context.json"
+      }).catch(() => {});
+    } finally {
+      for (const [key, value] of Object.entries(originalEnv)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+
+    expect(capturedEnvs).toHaveLength(1);
+    expect(capturedEnvs[0]).not.toHaveProperty("IGA_CLIENT_ID");
+    expect(capturedEnvs[0]).not.toHaveProperty("IGA_CLIENT_SECRET");
+    expect(capturedEnvs[0]).not.toHaveProperty("IGA_TOKEN_ENDPOINT");
+    expect(capturedEnvs[0]).not.toHaveProperty("IGA_BASE_URL");
+    expect(capturedEnvs[0].IGA_BROKER_URL).toBe("https://broker.test.example.com");
+  });
 });
 
 describe("JobRuntimeExecutor - resolveArtifactBuffer", () => {
@@ -318,6 +358,46 @@ describe("JobRuntimeExecutor - Python support", () => {
     }
 
     expect(capturedEnvs).toHaveLength(1);
+    expect(capturedEnvs[0].IGA_BROKER_URL).toBe("https://broker.test.example.com");
+  });
+
+  it("never forwards direct IGA credentials to the Python child process env (SEC-1)", async () => {
+    const executor = createExecutor();
+    const capturedEnvs = [];
+    const origSpawn = executor._spawnEntrypoint.bind(executor);
+    executor._spawnEntrypoint = (opts) => { capturedEnvs.push(opts.extraEnv); return origSpawn(opts); };
+
+    const originalEnv = {
+      RUNTIME_BROKER_URL: process.env.RUNTIME_BROKER_URL,
+      IGA_CLIENT_ID: process.env.IGA_CLIENT_ID,
+      IGA_CLIENT_SECRET: process.env.IGA_CLIENT_SECRET,
+      IGA_TOKEN_ENDPOINT: process.env.IGA_TOKEN_ENDPOINT,
+      IGA_BASE_URL: process.env.IGA_BASE_URL
+    };
+    process.env.RUNTIME_BROKER_URL = "https://broker.test.example.com";
+    process.env.IGA_CLIENT_ID = "leaked-client-id";
+    process.env.IGA_CLIENT_SECRET = "leaked-client-secret";
+    process.env.IGA_TOKEN_ENDPOINT = "https://iga.test.example.com/oauth2/token";
+    process.env.IGA_BASE_URL = "https://iga.test.example.com";
+    try {
+      await executor.executePythonEntrypoint({
+        runId: "run-1",
+        execution: { definition: { runtime: "python", runtimeVersion: "python311", entrypoint: "main.py" } },
+        extracted: { extractDir: "/tmp", entrypointPath: "main.py", cleanup: async () => {} },
+        contextFilePath: "/tmp/context.json"
+      }).catch(() => {});
+    } finally {
+      for (const [key, value] of Object.entries(originalEnv)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+
+    expect(capturedEnvs).toHaveLength(1);
+    expect(capturedEnvs[0]).not.toHaveProperty("IGA_CLIENT_ID");
+    expect(capturedEnvs[0]).not.toHaveProperty("IGA_CLIENT_SECRET");
+    expect(capturedEnvs[0]).not.toHaveProperty("IGA_TOKEN_ENDPOINT");
+    expect(capturedEnvs[0]).not.toHaveProperty("IGA_BASE_URL");
     expect(capturedEnvs[0].IGA_BROKER_URL).toBe("https://broker.test.example.com");
   });
 });

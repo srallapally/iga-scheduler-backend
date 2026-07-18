@@ -4,11 +4,7 @@ export function validateWorkerStartupConfig({ env = process.env } = {}) {
   const required = [
     "GCP_PROJECT_ID",
     "RUNTIME_SERVICE_ACCOUNT_EMAIL",
-    "RUNTIME_BROKER_URL",
-    "IGA_TOKEN_ENDPOINT",
-    "IGA_CLIENT_ID",
-    "IGA_CLIENT_SECRET",
-    "IGA_BASE_URL"
+    "RUNTIME_BROKER_URL"
   ];
 
   const missing = required.filter((name) => !env[name]);

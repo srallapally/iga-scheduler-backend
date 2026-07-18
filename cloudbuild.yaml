@@ -126,8 +126,8 @@ steps:
           --service-account="$$RUNTIME_SA" \
           --min-instances=1 \
           --no-cpu-throttling \
-          --set-env-vars="NODE_ENV=production,GCP_PROJECT_ID=${PROJECT_ID},GCP_REGION=${_REGION},JOB_ZIP_BUCKET=$$JOB_ZIP_BUCKET,WORKER_REQUIRE_RUNTIME_ISOLATION=false,WORKER_INVOKER_SERVICE_ACCOUNT_EMAIL=$$SCHEDULER_SA,RUNTIME_BROKER_URL=${_SERVICE_URL},IGA_TOKEN_ENDPOINT=${_IGA_TOKEN_ENDPOINT},IGA_BASE_URL=${_IGA_BASE_URL},RUNTIME_WORKER_URL=${_RUNTIME_WORKER_URL},RUNTIME_SERVICE_ACCOUNT_EMAIL=$$RUNTIME_SA,DB_ENGINE=cloud-sql,DB_INSTANCE_CONNECTION_NAME=$$DB_CONN,DB_USER=iga_scheduler_app,DB_NAME=iga_scheduler,RUNTIME_CLOUD_RUN_JOB_NAME=iga-scheduler-runtime" \
-          --set-secrets="IGA_CLIENT_ID=iga-scheduler-iga-client-id:latest,IGA_CLIENT_SECRET=iga-scheduler-iga-client-secret:latest,DB_PASSWORD=iga-scheduler-db-password:latest"
+          --set-env-vars="NODE_ENV=production,GCP_PROJECT_ID=${PROJECT_ID},GCP_REGION=${_REGION},JOB_ZIP_BUCKET=$$JOB_ZIP_BUCKET,WORKER_REQUIRE_RUNTIME_ISOLATION=false,WORKER_INVOKER_SERVICE_ACCOUNT_EMAIL=$$SCHEDULER_SA,RUNTIME_BROKER_URL=${_SERVICE_URL},RUNTIME_WORKER_URL=${_RUNTIME_WORKER_URL},RUNTIME_SERVICE_ACCOUNT_EMAIL=$$RUNTIME_SA,DB_ENGINE=cloud-sql,DB_INSTANCE_CONNECTION_NAME=$$DB_CONN,DB_USER=iga_scheduler_app,DB_NAME=iga_scheduler,RUNTIME_CLOUD_RUN_JOB_NAME=iga-scheduler-runtime" \
+          --set-secrets="DB_PASSWORD=iga-scheduler-db-password:latest"
 
   # ── Deploy scheduler service ─────────────────────────────────────────────────
   - name: gcr.io/google.com/cloudsdktool/cloud-sdk

@@ -28,16 +28,16 @@ Priority legend:
 | CIP-1 | P1 | CI runs no tests | CI / process | Verified | **Resolved** — this PR, ADR 0010. CIP-2 (hermetic PG-backed CI so the 28 skipped tests run) remains a separate follow-on |
 | SEC-8 | P1 | Production guardrails fail open: all prod validation is gated on `NODE_ENV === "production"`; drift silently disables isolation/DB-engine checks | Security / defense-in-depth | Verified | **Resolved** — this PR, ADR 0022 |
 | SEC-5 | P2 | `publicAuth` trusts JWT-header `alg`, nullifying algorithm allowlist | Security / defense-in-depth | By inspection | **Resolved** — this PR, ADR 0020 |
-| COR-4 | P2 | No automatic retry despite full retry-classification machinery | Correctness | By inspection | Open |
-| COR-5 | P2 | Stale sweeper keys off `started_at`, not `heartbeat_at`; hard job ceiling | Correctness | By inspection | Open |
-| COR-6 | P2 | Misfire policy replays every missed occurrence after an outage | Correctness | By inspection | Open |
+| COR-4 | P2 | No automatic retry despite full retry-classification machinery | Correctness | By inspection | **Won't fix** — issue #86 closed not-planned. Manual retry already works; bounded blast radius |
+| COR-5 | P2 | Stale sweeper keys off `started_at`, not `heartbeat_at`; hard job ceiling | Correctness | By inspection | **Won't fix** — issue #87 closed not-planned. Bounded by the existing 1800s schema cap |
+| COR-6 | P2 | Misfire policy replays every missed occurrence after an outage | Correctness | By inspection | **Won't fix** — issue #88 closed not-planned. Re-verified against master: not reproducible, no replay/herd loop exists in current `computeNextFireAt` |
 | COR-7 | P1 | Definition delete does not cascade; orphaned instances fail-loop forever | Correctness | Verified | **Resolved** — this PR, ADR 0012 |
-| CIP-2 | P2 | Test suite not hermetic; PG store tests skip silently without a database | CI / test integrity | Verified | Open |
+| CIP-2 | P2 | Test suite not hermetic; PG store tests skip silently without a database | CI / test integrity | Verified | **Won't fix** — issue #89 closed not-planned. CI-infrastructure investment, not a quick code change |
 | SEC-6 | P2 | Self-asserted approval/scan presented as a trust chain | Security / control theatre | Verified | **Resolved** — this PR, ADR 0021. Fields dropped rather than backed by a real workflow |
 | SEC-7 | P2 | IGA proxy does not bind caller to run; audit attribution forgeable across concurrent runs | Security / audit integrity | Verified | **Resolved** — this PR, ADR 0018 |
 | OPS-1 | P2 | GCS bucket missing `public_access_prevention = "enforced"` | Hardening | Verified | **Resolved** — this PR, ADR 0023 |
-| SCA-1 | P2 | Pipeline throughput ceiling well below data-layer capacity | Scalability | By inspection | Open |
-| DBT-1 | P3 | Dead tenancy plumbing (`tenant_id`, `tenantId`) after multi-tenancy dropped | Cleanup | By inspection | Open |
+| SCA-1 | P2 | Pipeline throughput ceiling well below data-layer capacity | Scalability | By inspection | **Won't fix** — issue #90 closed not-planned. Re-verified post pull-worker rework: old bottleneck gone, remainder is `worker_pool_size` capacity planning, not a bug |
+| DBT-1 | P3 | Dead tenancy plumbing (`tenant_id`, `tenantId`) after multi-tenancy dropped | Cleanup | By inspection | **Won't fix** — issue #91 closed not-planned. P3, no runtime consequence by definition |
 | DBT-2 | P3 | `dispatch_id` written but never read (fixing COR-1 activates it) | Cleanup | By inspection | **Resolved by COR-1** — `dispatch_id` is now read and enforced, see COR-1's entry and ADR 0014 |
 
 ---
@@ -142,25 +142,29 @@ Priority legend:
 **Fix:** Pin expected algorithms (e.g. `["RS256","ES256"]`).
 **Resolution:** `createJoseVerifier` now takes a fixed `algorithms` parameter (default `["RS256", "ES256", "PS256"]`) and passes it directly to `jwtVerify`, instead of reading `alg` back out of the token's own header. The default had to include `PS256`, not just the bug report's illustrative `RS256`/`ES256` example — this codebase's PingOne AIC (ForgeRock) integration signs with PS256, confirmed by an existing test, so a narrower default would have regressed real AIC deployments while fixing the security gap. `createPublicAuthMiddleware` threads an `algorithms` option through, defaulting from a new optional `PUBLIC_API_ALGORITHMS` env var (comma-separated) — unset for both PingOne and AIC callers today, since both already fall inside the built-in default. See `docs/adr/0020-jwt-algorithm-allowlist.md`.
 
-### COR-4 — No automatic retry
+### COR-4 — No automatic retry — **Won't fix**
 **Where:** `retryClassifier` computes `retryable`, recorded and audited; nothing requeues.
 **What:** Transient worker/GCS/ES failures become permanent FAILED requiring manual retry. The classification is currently decorative.
 **Fix:** On retryable classification, requeue with attempt increment and a backoff cap.
+**Resolution:** Closed as won't-fix (issue #86, `not_planned`). Manual retry already works end-to-end via `RunControlService.retryRun` — this is an operational quality-of-life gap with bounded blast radius, not a correctness or safety issue. Deprioritized relative to SEC-8/OPS-1; revisit if manual-retry operational load becomes a real burden.
 
-### COR-5 — Sweeper keys off `started_at`, not heartbeat
+### COR-5 — Sweeper keys off `started_at`, not heartbeat — **Won't fix**
 **Where:** `src/stores/runStore.js` (`listStaleRunningIds`/`listStaleCancellingIds` use `started_at`); `heartbeat_at` written but unread.
 **What:** Hard ceiling ~= threshold from start; a job configured near `WORKER_MAX_TIMEOUT_SECONDS` races the sweeper within the grace window. (`timeoutSeconds` is schema-capped at 1800, so the 30-min ceiling is enforced policy — the finding is that legitimate long IGA jobs can't be configured, plus the near-boundary race.)
 **Fix:** Sweep on heartbeat staleness and have the worker heartbeat; raise the cap for reconciliation workloads.
+**Resolution:** Closed as won't-fix (issue #87, `not_planned`). Bounded by the existing schema-enforced 1800s cap — no job can silently run past it regardless of this gap. `heartbeat_at` is now actively written by the pull-worker's heartbeat loop (AVL-1 residual, `RunStore.touchHeartbeat`) but the sweeper still doesn't read it — a real hardening improvement, not an active correctness bug. Deprioritized; the data the fix would need already exists, so cheap to revisit later.
 
-### COR-6 — Misfire policy replays everything
+### COR-6 — Misfire policy replays everything — **Won't fix (not reproducible)**
 **Where:** `SchedulerTickService.tick` advances `nextFireAt` one step per tick.
 **What:** After an outage, every missed occurrence fires — a herd of stale runs.
 **Fix:** Add a "skip to next valid fire" option per instance; catch up at most once.
+**Resolution:** Closed as won't-fix (issue #88, `not_planned`). Re-verified against current master: `computeNextFireAt` advances exactly one cron step per tick per instance; there is no occurrence-by-occurrence backlog/replay loop that would produce a herd of runs after an outage. No PR or ADR in this repo's history ever touched this logic, so the original finding looks like a misdiagnosis rather than a regression. Reopen with a concrete repro if this resurfaces.
 
-### CIP-2 — Test suite not hermetic
+### CIP-2 — Test suite not hermetic — **Won't fix (for now)**
 **Where:** Full run: 392 tests, 12 env-coupling failures (config/middleware read `process.env` at construction), 28 skipped. PG store tests skip without a local database.
 **What:** "npm test before done" silently depends on the developer's shell; the concurrency-critical SQL is the least-exercised code whenever PG is absent.
 **Fix:** vitest setup file to seed required env; CI Postgres service so store tests run instead of skip.
+**Resolution:** Closed as won't-fix (issue #89, `not_planned`). Real gap, but it's a CI-infrastructure investment (provisioning/wiring an ephemeral Postgres into Cloud Build), not a quick code change — every PG-gated code path across this session's fixes was instead manually verified against a real local Postgres instance at merge time. Deprioritized relative to SEC-8/OPS-1; worth picking up as its own infra-focused pass.
 
 ### SEC-6 — Approval/scan is self-asserted — **Resolved**
 **Where:** `src/services/jobDefinitionService.js:57-66` stamps `APPROVED`/`CLEAN` unconditionally; `src/services/workerRunService.js:357-362` validates fields the same path always writes.
@@ -179,19 +183,21 @@ Priority legend:
 **Fix:** Add `public_access_prevention = "enforced"`.
 **Resolution:** Added `public_access_prevention = "enforced"` to `google_storage_bucket.job_zip`. `uniform_bucket_level_access` only forces IAM-based access control, not the absence of a public grant — this closes that gap at the GCS platform level, independent of any IAM binding. No functional change to any existing upload/download path. See `docs/adr/0023-gcs-public-access-prevention.md`.
 
-### SCA-1 — Pipeline throughput ceiling
-**Where:** tick (≤100/min, single txn), dispatch (10 per 5s, serial awaits w/ ES fetch each), execution (≤10 worker instances, no per-instance cap).
+### SCA-1 — Pipeline throughput ceiling — **Won't fix (superseded)**
+**Where (as originally reported, pre-pull-worker):** tick (≤100/min, single txn), dispatch (10 per 5s, serial awaits w/ ES fetch each), execution (≤10 worker instances, no per-instance cap).
 **What:** Data layer handles thousands of instances / millions of runs trivially; the push pipeline cannot. Top-of-hour cron clustering makes 1000+ simultaneously-due instances take ~10 min just to create runs, longer to dispatch, beyond worker concurrency.
 **Fix:** Parallelize dispatch and adopt pull-worker (AVL-1); raise batch sizes. Structural ceiling is the push-to-shared-container model.
+**Resolution:** Closed as won't-fix (issue #90, `not_planned`). AVL-1's pull-worker rework (ADR 0019) already removed the described bottleneck — dispatch is no longer a serial scheduler-side push; the worker atomically claims a full batch (`RunStore.claimNextQueued`, `FOR UPDATE SKIP LOCKED`) and executes concurrently, with no per-run ES fetch on that path. What remains — `worker_pool_size × WORKER_MAX_CONCURRENCY` (20 concurrent by default) — is an operator-tunable capacity number, not an architectural bottleneck. No further code change warranted; re-sizing `worker_pool_size` is the answer if real clustering is observed in practice.
 
 ---
 
 ## P3
 
-### DBT-1 — Dead tenancy plumbing
+### DBT-1 — Dead tenancy plumbing — **Won't fix**
 **Where:** `tenant_id` columns (`migrations/001_scheduler_core.sql`); `tenantId` throughout services and `buildRunId`.
 **What:** Half-implemented tenancy after multi-tenancy was dropped invites the belief it works.
 **Fix:** Remove, or document explicitly as reserved-and-unenforced.
+**Resolution:** Closed as won't-fix (issue #91, `not_planned`). P3 by its own classification — no runtime consequence. Dead but harmless; purely cosmetic/documentation debt, deprioritized indefinitely relative to anything with actual runtime consequence. Revisit opportunistically during unrelated work in these files rather than as a dedicated pass.
 
 ### DBT-2 — `dispatch_id` written, never read — **Resolved by COR-1**
 **Where:** schema + `runControlService`; no read site.

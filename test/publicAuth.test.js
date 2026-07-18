@@ -177,6 +177,81 @@ describe("createJoseVerifier (local JWKS integration test)", () => {
     }
   });
 
+  it("rejects a token signed with an algorithm outside the default allowlist (SEC-5)", async () => {
+    const { generateKeyPair, SignJWT, exportJWK } = await import("jose");
+    const { privateKey, publicKey } = await generateKeyPair("RS384");
+
+    const jwk = await exportJWK(publicKey);
+    jwk.kid = "test-key-rs384";
+    jwk.alg = "RS384";
+    jwk.use = "sig";
+    const jwks = { keys: [jwk] };
+
+    const issuer = "https://auth.test.local";
+    const audience = "https://scheduler.test.local";
+
+    const token = await new SignJWT({ scope: "scheduler:admin" })
+      .setProtectedHeader({ alg: "RS384", kid: "test-key-rs384" })
+      .setIssuer(issuer)
+      .setAudience(audience)
+      .setExpirationTime("1h")
+      .setSubject("test-client")
+      .sign(privateKey);
+
+    const jwksApp = express();
+    jwksApp.get("/.well-known/jwks.json", (_req, res) => res.json(jwks));
+    const jwksServer = await new Promise((resolve) => {
+      const s = jwksApp.listen(0, () => resolve(s));
+    });
+
+    try {
+      const { port } = jwksServer.address();
+      const jwksUrl = `http://localhost:${port}/.well-known/jwks.json`;
+      const verifyToken = createJoseVerifier({ issuer, audience, jwksUrl });
+      await expect(verifyToken(token)).rejects.toThrow();
+    } finally {
+      await new Promise((resolve) => jwksServer.close(resolve));
+    }
+  });
+
+  it("accepts a token signed with an algorithm outside the default when explicitly allowlisted", async () => {
+    const { generateKeyPair, SignJWT, exportJWK } = await import("jose");
+    const { privateKey, publicKey } = await generateKeyPair("RS384");
+
+    const jwk = await exportJWK(publicKey);
+    jwk.kid = "test-key-rs384-b";
+    jwk.alg = "RS384";
+    jwk.use = "sig";
+    const jwks = { keys: [jwk] };
+
+    const issuer = "https://auth.test.local";
+    const audience = "https://scheduler.test.local";
+
+    const token = await new SignJWT({ scope: "scheduler:admin" })
+      .setProtectedHeader({ alg: "RS384", kid: "test-key-rs384-b" })
+      .setIssuer(issuer)
+      .setAudience(audience)
+      .setExpirationTime("1h")
+      .setSubject("test-client")
+      .sign(privateKey);
+
+    const jwksApp = express();
+    jwksApp.get("/.well-known/jwks.json", (_req, res) => res.json(jwks));
+    const jwksServer = await new Promise((resolve) => {
+      const s = jwksApp.listen(0, () => resolve(s));
+    });
+
+    try {
+      const { port } = jwksServer.address();
+      const jwksUrl = `http://localhost:${port}/.well-known/jwks.json`;
+      const verifyToken = createJoseVerifier({ issuer, audience, jwksUrl, algorithms: ["RS384"] });
+      const payload = await verifyToken(token);
+      expect(payload.sub).toBe("test-client");
+    } finally {
+      await new Promise((resolve) => jwksServer.close(resolve));
+    }
+  });
+
   it("discovers jwks_uri from OIDC discovery document (AIC path)", async () => {
     const { generateKeyPair, SignJWT, exportJWK } = await import("jose");
     // AIC signs with PS256 — verify the middleware accepts it via header-driven alg

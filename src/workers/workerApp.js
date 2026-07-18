@@ -41,7 +41,7 @@ export function createWorkerApp({
   }
 
   app.post("/execute", auth, (req, res) => {
-    const { runId, execution, context } = req.body || {};
+    const { runId, dispatchId, execution, context } = req.body || {};
     if (!runId || typeof runId !== "string") {
       return res.status(400).json({ error: "runId is required" });
     }
@@ -58,7 +58,7 @@ export function createWorkerApp({
       .then(async (result) => {
         if (onExecutionSuccess) {
           try {
-            await onExecutionSuccess({ runId, result });
+            await onExecutionSuccess({ runId, dispatchId, result });
           } catch (callbackErr) {
             console.error(`[worker] onExecutionSuccess callback failed for run ${runId}:`, callbackErr.message);
           }
@@ -68,7 +68,7 @@ export function createWorkerApp({
         console.error(`[worker] execution failed for run ${runId}:`, err.message);
         if (onExecutionError) {
           try {
-            await onExecutionError({ runId, error: err });
+            await onExecutionError({ runId, dispatchId, error: err });
           } catch (callbackErr) {
             console.error(`[worker] onExecutionError callback failed for run ${runId}:`, callbackErr.message);
           }

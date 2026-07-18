@@ -3,7 +3,7 @@ import { StaleRunSweeper } from "../src/services/staleRunSweeper.js";
 
 function makeRunStore({ staleIds = [], staleCancellingIds = [], markFailedResult = true, markCancelledResult = true } = {}) {
   return {
-    listStaleRunningIds: vi.fn(async () => [...staleIds]),
+    listStaleRunningIds: vi.fn(async () => staleIds.map((runId) => ({ runId, dispatchId: `dispatch-${runId}` }))),
     listStaleCancellingIds: vi.fn(async () => [...staleCancellingIds]),
     markFailed: vi.fn(async () => markFailedResult),
     markCancelled: vi.fn(async () => markCancelledResult)
@@ -54,10 +54,12 @@ describe("StaleRunSweeper", () => {
     expect(runStore.markFailed).toHaveBeenCalledTimes(2);
     expect(runStore.markFailed).toHaveBeenCalledWith(expect.objectContaining({
       runId: "run-1",
+      dispatchId: "dispatch-run-1",
       error: expect.objectContaining({ code: "STALE_RUNNING", retryable: false })
     }));
     expect(runStore.markFailed).toHaveBeenCalledWith(expect.objectContaining({
       runId: "run-2",
+      dispatchId: "dispatch-run-2",
       error: expect.objectContaining({ code: "STALE_RUNNING", retryable: false })
     }));
     sweeper.stop();
@@ -101,7 +103,10 @@ describe("StaleRunSweeper", () => {
 
   it("logs a warning and continues when markFailed throws for one run", async () => {
     const runStore = {
-      listStaleRunningIds: vi.fn(async () => ["fail-run", "ok-run"]),
+      listStaleRunningIds: vi.fn(async () => [
+        { runId: "fail-run", dispatchId: "dispatch-fail" },
+        { runId: "ok-run", dispatchId: "dispatch-ok" }
+      ]),
       listStaleCancellingIds: vi.fn(async () => []),
       markFailed: vi.fn(async ({ runId }) => {
         if (runId === "fail-run") throw new Error("update error");

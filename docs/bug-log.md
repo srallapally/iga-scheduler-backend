@@ -19,7 +19,7 @@ Priority legend:
 | SEC-2 | P0 | `secretRef` resolution has no allowlist — jobs can read platform secrets | Security / credential boundary | Verified | **Resolved (app-layer)** — PR #54 (`5fbc4a6`), ADR 0007. Soft control: IAM follow-on (scoped resolver SA) still open |
 | SEC-3 | P0 | Completion endpoint accepts runtime SA; any job can forge any run's result | Security / audit integrity | Verified | **Resolved** — PR #55 (`619b083`), ADR 0008. Route removed; sibling-route principal concern remains a separate follow-on |
 | SEC-4 | P1 | Same-UID co-residency: job subprocess can read broker `/proc/1/environ` | Security / isolation | By inspection | **Partially resolved** — PR #57, ADR 0009. DB password moved to Secret Manager fetch (no env-var secrets left to leak via `/proc/1/environ` today); job-UID separation (`gosu`/`jobrunner`) deferred to AVL-1 — could not be verified in a real container in this environment, and container-per-job supersedes the question anyway |
-| COR-1 | P1 | No fencing token: a ghost subprocess can complete a re-dispatched run | Correctness / concurrency | By inspection | Open |
+| COR-1 | P1 | No fencing token: a ghost subprocess can complete a re-dispatched run | Correctness / concurrency | **Verified** (reproduced against a real Postgres) | **Resolved** — this PR, ADR 0014 |
 | COR-2 | P1 | Cancellation records CANCELLED while side effects fully execute | Correctness / audit integrity | Verified | Open |
 | COR-3 | P1 | Definition version hardcoded to 1; re-upload swaps code under a pinned version | Change control | Verified | **Resolved** — this PR, ADR 0013. `LocalDefinitionService` has the same pattern, left untouched (local-dev only) |
 | AVL-1 | P1 | Worker runs jobs as fire-and-forget subprocess; killed on every deploy/scale-in | Availability / lifecycle | By inspection | Open |
@@ -36,7 +36,7 @@ Priority legend:
 | OPS-1 | P2 | GCS bucket missing `public_access_prevention = "enforced"` | Hardening | Verified | Open |
 | SCA-1 | P2 | Pipeline throughput ceiling well below data-layer capacity | Scalability | By inspection | Open |
 | DBT-1 | P3 | Dead tenancy plumbing (`tenant_id`, `tenantId`) after multi-tenancy dropped | Cleanup | By inspection | Open |
-| DBT-2 | P3 | `dispatch_id` written but never read (fixing COR-1 activates it) | Cleanup | By inspection | Open |
+| DBT-2 | P3 | `dispatch_id` written but never read (fixing COR-1 activates it) | Cleanup | By inspection | **Resolved by COR-1** — `dispatch_id` is now read and enforced, see COR-1's entry and ADR 0014 |
 
 ---
 
@@ -74,10 +74,11 @@ Priority legend:
 **Fix:** Run jobs under a distinct unprivileged UID with no read access to the server process env, or move to container-per-job (see AVL-1 fix). Interacts with SEC-1/SEC-2: even with those fixed, `/proc` access re-exposes any secret the server holds.
 **Resolution (partial):** The planned fix had two coupled parts — (a) run job subprocesses under a distinct `jobrunner` uid via a `gosu` setuid helper, and (b) fetch `DB_PASSWORD` from Secret Manager instead of mounting it as an env var. **(b) is shipped**: `createPgPool` (`src/clients/pgClient.js`) now fetches the password via `resolveCloudSqlPassword`, held only in the pool's local config, never on `process.env`; both the worker and scheduler `cloudbuild.yaml` deploy steps no longer mount `DB_PASSWORD` as a secret. **(a) is deferred**: the plan required verifying `gosu`/setuid actually works under Cloud Run's gVisor sandbox in a real container build before shipping it, and this environment has no Docker daemon and no path to deploy to real Cloud Run to check — shipping it unverified would have violated the plan's own "verify in a real container, don't assert from source" requirement. (a) is deferred to the container-per-job rework (AVL-1), which makes the question moot structurally (separate containers share no UID at all). See `docs/adr/0009-job-uid-and-db-secret-handling.md`. **Residual:** no secret currently mounted as an env var on either service remains readable via `/proc/1/environ` today, but job↔job mutual isolation and protection of any future env-mounted secret both still depend on (a) or AVL-1.
 
-### COR-1 — No fencing token on claim/complete
+### COR-1 — No fencing token on claim/complete — **Resolved**
 **Where:** `src/stores/runStore.js` (`claimRun`, `markSucceeded`, `markFailed` guard on `state='RUNNING'` only); `dispatch_id` generated in `src/services/runControlService.js` but never checked.
 **What:** Sweeper (or SEC-3 forgery) flips a still-alive run to FAILED → operator retries → re-claimed, RUNNING again → the original subprocess finishes and marks the retry's attempt SUCCEEDED with the original result. The overlap is real because the sweeper only flips state; it kills no process (see AVL-1).
 **Fix:** Thread `dispatch_id` as a fencing token: `... WHERE run_id=$1 AND state='RUNNING' AND dispatch_id=$2`. Activates DBT-2.
+**Resolution:** `claimRun` now mints a fresh `dispatch_id` on every successful claim (not just retry/redrive) and returns it; `recordRuntimeExecution`/`markSucceeded`/`markFailed` all accept an optional `dispatchId` and fence their UPDATE on it when provided. The token is threaded through the full dispatch path — claim → `/execute` POST body → worker completion callbacks → `markSucceeded`/`markFailed` — and through the stale-run sweeper's own `markFailed` call. **Verified against a real local Postgres instance** (this sandbox has no Docker daemon, but `psql`/`postgres` were natively available): the exact ghost-completion-after-retry race reproduces and is correctly rejected; the legitimate re-claimed attempt still completes normally. `DBT-2` (`dispatch_id` written but never read) is now activated by this fix. See `docs/adr/0014-dispatch-fencing-token.md`. **Residual:** `LocalRunStore` (SQLite, local dev) is not fenced — consistent with this codebase's established pattern of holding local dev to a simpler bar; `completeRun` (dead code per SEC-3) is also not threaded, since it has no production caller.
 
 ### COR-2 — Cancellation loses real outcomes
 **Where:** `src/services/runControlService.js:40-52`; `WorkerServiceRuntimeLauncher.cancel()` returns `{status:"unsupported"}`.
@@ -170,6 +171,7 @@ Priority legend:
 **What:** Half-implemented tenancy after multi-tenancy was dropped invites the belief it works.
 **Fix:** Remove, or document explicitly as reserved-and-unenforced.
 
-### DBT-2 — `dispatch_id` written, never read
+### DBT-2 — `dispatch_id` written, never read — **Resolved by COR-1**
 **Where:** schema + `runControlService`; no read site.
 **What:** Fixing COR-1 gives it a purpose; until then it is dead.
+**Resolution:** COR-1 added the read/enforcement site — `dispatch_id` is now compared in `claimRun`/`markSucceeded`/`markFailed`/`recordRuntimeExecution`'s WHERE clauses. See COR-1 above and `docs/adr/0014-dispatch-fencing-token.md`.

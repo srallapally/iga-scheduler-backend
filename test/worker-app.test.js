@@ -98,6 +98,26 @@ describe("POST /execute", () => {
     expect(onExecutionError).toHaveBeenCalledWith({ runId: "run-1", error: err });
   });
 
+  it("threads dispatchId through to onExecutionSuccess (COR-1)", async () => {
+    const result = { status: "completed", exitCode: 0 };
+    const executor = makeExecutor(result);
+    const onExecutionSuccess = vi.fn(async () => {});
+    const app = createWorkerApp({ executor, authMiddleware: noopAuth, onExecutionSuccess });
+    await request(app).post("/execute").send({ ...VALID_BODY, dispatchId: "dispatch-abc" });
+    await vi.waitFor(() => expect(onExecutionSuccess).toHaveBeenCalledOnce());
+    expect(onExecutionSuccess).toHaveBeenCalledWith({ runId: "run-1", dispatchId: "dispatch-abc", result });
+  });
+
+  it("threads dispatchId through to onExecutionError (COR-1)", async () => {
+    const err = new Error("execution boom");
+    const executor = { execute: vi.fn(() => Promise.reject(err)) };
+    const onExecutionError = vi.fn(async () => {});
+    const app = createWorkerApp({ executor, authMiddleware: noopAuth, onExecutionError });
+    await request(app).post("/execute").send({ ...VALID_BODY, dispatchId: "dispatch-abc" });
+    await vi.waitFor(() => expect(onExecutionError).toHaveBeenCalledOnce());
+    expect(onExecutionError).toHaveBeenCalledWith({ runId: "run-1", dispatchId: "dispatch-abc", error: err });
+  });
+
   it("does not crash when onExecutionError itself throws", async () => {
     const executor = { execute: vi.fn(() => Promise.reject(new Error("boom"))) };
     const onExecutionError = vi.fn(async () => { throw new Error("callback failed"); });

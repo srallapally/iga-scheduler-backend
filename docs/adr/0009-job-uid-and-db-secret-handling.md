@@ -33,6 +33,8 @@ the target sandbox (Cloud Run's gVisor) before shipping — "the runtime
 honoring the setuid bit" was explicitly called out as unconfirmed, with a
 documented fallback if it could not be verified.
 
+This ADR is implemented in PR #57.
+
 ---
 
 ## Decision

@@ -120,10 +120,7 @@ export class SchedulerTickService {
         ? {
           uri: definition.jobZip.uri,
           sha256: definition.jobZip.sha256,
-          generation: definition.jobZip.generation != null ? String(definition.jobZip.generation) : null,
-          approval: definition.jobZip.approval,
-          scan: definition.jobZip.scan,
-          revoked: definition.jobZip.revoked
+          generation: definition.jobZip.generation != null ? String(definition.jobZip.generation) : null
         }
         : null
     };

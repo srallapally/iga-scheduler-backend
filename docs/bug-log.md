@@ -32,7 +32,7 @@ Priority legend:
 | COR-6 | P2 | Misfire policy replays every missed occurrence after an outage | Correctness | By inspection | Open |
 | COR-7 | P1 | Definition delete does not cascade; orphaned instances fail-loop forever | Correctness | Verified | **Resolved** — this PR, ADR 0012 |
 | CIP-2 | P2 | Test suite not hermetic; PG store tests skip silently without a database | CI / test integrity | Verified | Open |
-| SEC-6 | P2 | Self-asserted approval/scan presented as a trust chain | Security / control theatre | Verified | Open |
+| SEC-6 | P2 | Self-asserted approval/scan presented as a trust chain | Security / control theatre | Verified | **Resolved** — this PR, ADR 0021. Fields dropped rather than backed by a real workflow |
 | SEC-7 | P2 | IGA proxy does not bind caller to run; audit attribution forgeable across concurrent runs | Security / audit integrity | Verified | **Resolved** — this PR, ADR 0018 |
 | OPS-1 | P2 | GCS bucket missing `public_access_prevention = "enforced"` | Hardening | Verified | Open |
 | SCA-1 | P2 | Pipeline throughput ceiling well below data-layer capacity | Scalability | By inspection | Open |
@@ -48,7 +48,7 @@ Priority legend:
 **What:** The Node and Python spawn paths spread `IGA_CLIENT_ID`/`IGA_CLIENT_SECRET` from the worker env into the job subprocess env. The broker IGA proxy (`RuntimeIgaProxyService`) — with its RUNNING-state gate and per-request audit — is bypassable: a malicious artifact reads the secret from its own environment and calls IGA directly, unaudited, ungated. The client-credentials grant is not tied to run lifecycle, so the access is durable.
 **Blast radius:** Any caller holding a token with the upload scope obtains standing IGA-tenant access.
 **Fix:** Remove the five `IGA_*` spread lines from both spawn paths; stop mounting `IGA_CLIENT_SECRET` into the worker service in `cloudbuild.yaml`. The SDK already prefers `IGA_BROKER_URL`; direct creds are labelled a local-dev fallback in `src/sdk/scheduler-sdk.js:234` and should never be present in production.
-**Note:** `docs/architecture-review.md` lists the "trust gate" as Fixed; that refers to the approval/scan fields (see SEC-6), which is a separate and weaker control. This env-injection path is not addressed by that item.
+**Note:** `docs/architecture-review.md` listed the "trust gate" as Fixed at the time; that referred to the approval/scan fields, a separate and (per SEC-6, since resolved by removing those fields entirely) weaker control than it claimed. This env-injection path was never addressed by that item either way.
 **Resolution:** Fixed in PR #52 (`ea8dbc7`, squash of `71d3825`). The four direct-credential spreads were removed from both `executeNodeEntrypoint` and `executePythonEntrypoint`; `IGA_BROKER_URL` remains. The worker's Cloud Run deploy step no longer sets `IGA_TOKEN_ENDPOINT`/`IGA_BASE_URL` as env vars or mounts `IGA_CLIENT_ID`/`IGA_CLIENT_SECRET` as secrets; the scheduler deploy step is unchanged. `validateWorkerStartupConfig` no longer requires the four IGA vars. Regression tests in `test/job-runtime-executor.test.js` assert the subprocess env excludes the credentials while still receiving `IGA_BROKER_URL`, for both runtimes. See `docs/adr/0006-iga-credential-boundary.md`. **Cross-note:** this fix removes the IGA secret from the worker's own environment, but SEC-4 (co-residency `/proc/1/environ` read) remains open — until it's fixed, a job can still read whatever *other* secrets a co-resident worker process holds.
 
 ### SEC-2 — `secretRef` resolution has no allowlist — **Resolved (app-layer)**
@@ -155,10 +155,11 @@ Priority legend:
 **What:** "npm test before done" silently depends on the developer's shell; the concurrency-critical SQL is the least-exercised code whenever PG is absent.
 **Fix:** vitest setup file to seed required env; CI Postgres service so store tests run instead of skip.
 
-### SEC-6 — Approval/scan is self-asserted
+### SEC-6 — Approval/scan is self-asserted — **Resolved**
 **Where:** `src/services/jobDefinitionService.js:57-66` stamps `APPROVED`/`CLEAN` unconditionally; `src/services/workerRunService.js:357-362` validates fields the same path always writes.
 **What:** Ceremony that resembles a control. (`docs/architecture-review.md` marks this "Fixed" as the P0 trust gate — I disagree: writing constants and checking they equal the constants is not a trust decision. Flagging the disagreement rather than overriding the doc.)
 **Fix:** Wire a real scanner/approval workflow, or drop the fields to avoid false assurance.
+**Resolution:** Dropped the fields (explicit choice over building a real scanner/approval workflow). `jobZip.approval`/`.scan` are no longer stamped by either `JobDefinitionService.createDefinition` or `LocalDefinitionService.createDefinition`; `WorkerRunService.validateArtifactTrust` — the method that only ever checked these constants against themselves, plus a `revoked` flag confirmed never set anywhere in the codebase — is deleted along with both of its call sites (`dispatchRun`, `_runClaimedLocally`). `buildExecutionMetadata` and `SchedulerTickService.buildExecutionMetadataSnapshot` stop copying these fields through. The real, independent integrity controls — SHA-256 digest recompute against downloaded bytes (`verifyApprovedArtifact`) and GCS generation pinning — are unaffected; they never depended on `approval`/`scan`. `docs/architecture-review.md`'s "P0 trust gate: Fixed" claim is corrected to record this as a removal, not a fix. See `docs/adr/0021-remove-self-asserted-artifact-approval.md`.
 
 ### SEC-7 — IGA proxy does not bind caller to run — **Resolved**
 **Where:** `src/services/runtimeIgaProxyService.js:55-99`.

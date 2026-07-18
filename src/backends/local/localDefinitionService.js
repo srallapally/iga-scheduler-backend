@@ -5,7 +5,6 @@ import { validateZipBuffer } from "../../utils/zipValidation.js";
 import { createJobDefinitionSchema, patchJobDefinitionSchema } from "../../validation/jobDefinitionSchema.js";
 
 // JobDefinitionService-compatible class backed by SQLite + local filesystem.
-// Auto-seeds approval/scan trust fields on creation so validateArtifactTrust passes.
 
 export class LocalDefinitionService {
   constructor({ db, dataDir = ".local-data" }) {
@@ -37,10 +36,7 @@ export class LocalDefinitionService {
       jobZip: {
         uri: `local://${artifactPath}`,
         sha256: digest,
-        generation: "1",
-        // Auto-seed trust gate so validateArtifactTrust passes without an approval workflow
-        approval: { status: "APPROVED", approvedAt: now, sha256: digest, generation: "1" },
-        scan: { status: "CLEAN", scannedAt: now, sha256: digest }
+        generation: "1"
       },
       validation: {
         fileCount: zipInfo.fileCount,

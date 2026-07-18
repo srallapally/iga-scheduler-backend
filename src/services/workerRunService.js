@@ -75,7 +75,6 @@ export class WorkerRunService {
 
     try {
       const execution = await this.buildExecutionMetadata({ run });
-      this.validateArtifactTrust({ execution });
       const context = this.buildRuntimeContext({ run, execution, params: run.params || {} });
       const runtimeExecution = await this.isolatedRuntimeLauncher.launchExecution({ runId, dispatchId: run.dispatchId, run, execution, context });
       await this.recordRuntimeExecution({ runId, runtimeExecution, startedAt, dispatchId: run.dispatchId });
@@ -300,7 +299,6 @@ export class WorkerRunService {
           entrypoint: execution.definition.entrypoint
         }
       }));
-      this.validateArtifactTrust({ execution });
       execution.artifact.verification = await this.verifyApprovedArtifact({ execution });
       await this.emitAuditEvent(this.buildWorkerAuditEvent({
         eventType: "worker.artifact.verified",
@@ -374,16 +372,6 @@ export class WorkerRunService {
     }
   }
 
-  validateArtifactTrust({ execution }) {
-    const { artifact } = execution;
-    if (artifact.approval?.status !== "APPROVED") throw this.executionMetadataError("ARTIFACT_NOT_APPROVED", "approved artifact is missing APPROVED status", { retryable: false });
-    if (artifact.scan?.status !== "CLEAN") throw this.executionMetadataError("ARTIFACT_SCAN_NOT_CLEAN", "approved artifact is missing CLEAN scan status", { retryable: false });
-    if (artifact.approval.sha256 && artifact.approval.sha256 !== artifact.sha256) throw this.executionMetadataError("ARTIFACT_APPROVAL_DIGEST_MISMATCH", "artifact approval sha256 does not match executable artifact", { retryable: false });
-    if (artifact.approval.generation && String(artifact.approval.generation) !== String(artifact.generation)) throw this.executionMetadataError("ARTIFACT_APPROVAL_GENERATION_MISMATCH", "artifact approval generation does not match executable artifact", { retryable: false });
-    if (artifact.scan.sha256 && artifact.scan.sha256 !== artifact.sha256) throw this.executionMetadataError("ARTIFACT_SCAN_DIGEST_MISMATCH", "artifact scan sha256 does not match executable artifact", { retryable: false });
-    if (artifact.revoked === true) throw this.executionMetadataError("ARTIFACT_APPROVAL_REVOKED", "artifact approval has been revoked", { retryable: false });
-  }
-
   skippedResult({ runId, state }) {
     return { status: "skipped", runId, state, message: `Run is ${state}; worker execution was not started` };
   }
@@ -441,10 +429,7 @@ export class WorkerRunService {
       artifact: {
         uri: definition.jobZip.uri,
         sha256: definition.jobZip.sha256,
-        generation: String(definition.jobZip.generation),
-        approval: definition.jobZip.approval,
-        scan: definition.jobZip.scan,
-        revoked: definition.jobZip.revoked
+        generation: String(definition.jobZip.generation)
       }
     };
   }

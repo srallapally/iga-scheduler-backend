@@ -58,18 +58,7 @@ export class JobDefinitionService {
         jobZip: {
           uri: `gs://${this.config.jobZipBucket}/${approvedPath}`,
           sha256: digest,
-          generation: metadataResult.generation,
-          approval: {
-            status: "APPROVED",
-            sha256: digest,
-            generation: metadataResult.generation,
-            approvedAt: now
-          },
-          scan: {
-            status: "CLEAN",
-            sha256: digest,
-            scannedAt: now
-          }
+          generation: metadataResult.generation
         },
         validation: {
           fileCount: zipInfo.fileCount,

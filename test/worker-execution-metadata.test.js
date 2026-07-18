@@ -25,9 +25,7 @@ function definition(overrides = {}) {
     jobZip: {
       uri: "gs://bucket/approved/risk-score/1/hash/job.zip",
       sha256: "hash",
-      generation: "123",
-      approval: { status: "APPROVED", sha256: "hash", generation: "123", approvedAt: "2024-01-01T00:00:00.000Z" },
-      scan: { status: "CLEAN", sha256: "hash", scannedAt: "2024-01-01T00:00:00.000Z" }
+      generation: "123"
     },
     ...overrides
   };
@@ -62,9 +60,7 @@ describe("worker execution metadata", () => {
       artifact: {
         uri: "gs://bucket/approved/risk-score/1/hash/job.zip",
         sha256: "hash",
-        generation: "123",
-        approval: { status: "APPROVED", sha256: "hash", generation: "123", approvedAt: "2024-01-01T00:00:00.000Z" },
-        scan: { status: "CLEAN", sha256: "hash", scannedAt: "2024-01-01T00:00:00.000Z" }
+        generation: "123"
       }
     });
   });
@@ -114,9 +110,7 @@ function executionMetadataSnapshot(overrides = {}) {
     artifact: {
       uri: "gs://bucket/approved/risk-score/1/hash/job.zip",
       sha256: "hash",
-      generation: "123",
-      approval: { status: "APPROVED", sha256: "hash", generation: "123" },
-      scan: { status: "CLEAN", sha256: "hash" }
+      generation: "123"
     },
     ...overrides
   };
@@ -146,9 +140,7 @@ describe("worker execution metadata — snapshot path (AVL-2)", () => {
       artifact: {
         uri: "gs://bucket/approved/risk-score/1/hash/job.zip",
         sha256: "hash",
-        generation: "123",
-        approval: { status: "APPROVED", sha256: "hash", generation: "123" },
-        scan: { status: "CLEAN", sha256: "hash" }
+        generation: "123"
       }
     });
   });

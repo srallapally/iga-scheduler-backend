@@ -24,7 +24,7 @@
 
 | Prior item | Status |
 |---|---|
-| P0 trust gate | **Fixed** — `approval` + `scan` set on upload in `JobDefinitionService.createDefinition()` |
+| P0 trust gate | **Removed (SEC-6)** — `approval`/`scan` were self-asserted (written and checked by the same code path, never producible by any real workflow) and have been dropped rather than fixed; see "Artifact trust chain" below |
 | P1 drop Elasticsearch | **Cannot do** — IGA constraint |
 | P2 VPC connector | **Open** — still the highest-value remaining simplification |
 | P3 dead code | **Fixed** — six files deleted (PRs #4, #8) |
@@ -69,8 +69,8 @@ Self-scheduling `setTimeout` with exponential backoff (`intervalMs × 2^(failure
 ### Stale-RUNNING sweep
 `StaleRunSweeper` periodically queries `job_runs` for RUNNING rows older than the threshold, marks them FAILED with `STALE_RUNNING` error code. Per-run errors are isolated — one failure does not stop the sweep. Worker crashes no longer leave runs permanently stuck.
 
-### Artifact trust chain
-`createDefinition()` sets `approval: { status: "APPROVED", sha256, generation, approvedAt }` and `scan: { status: "CLEAN", sha256, scannedAt }` at upload time. Combined with SHA-256 hash verification and GCS generation pinning, every definition passes `validateArtifactTrust()` and artifact substitution is prevented.
+### Artifact trust chain (corrected, SEC-6)
+This row previously claimed `approval`/`scan` (stamped `APPROVED`/`CLEAN` unconditionally at upload) combined with hash/generation verification to prevent artifact substitution. That claim didn't hold: `approval`/`scan` were written and later checked by the same code path with no scanner or approval workflow ever in the loop — writing a constant and checking it equals itself is not a trust decision, and a `revoked` flag checked alongside them was never actually settable anywhere in the codebase either. All three fields have been removed (SEC-6) rather than "fixed," since there was no real control there to fix. What actually prevents artifact substitution, independent of that removed ceremony, is unchanged: `WorkerRunService.verifyApprovedArtifact` recomputes the SHA-256 digest against the real downloaded bytes, and `buildExecutionMetadata` pins the GCS object generation — both enforced on every dispatch, neither ever depended on `approval`/`scan`.
 
 ### IAM least-privilege
 Three service accounts (`scheduler_service`, `runtime`, `deployer`) with tightly scoped grants. The orphaned `worker_task_invoker` SA was removed from Terraform. The deployer SA has object-admin on the Terraform state bucket and the correct roles for `gcloud run deploy`.

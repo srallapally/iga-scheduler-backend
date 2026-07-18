@@ -187,9 +187,7 @@ function activeDefinition(overrides = {}) {
     jobZip: {
       uri: "gs://bucket/approved/risk-score/hash/job.zip",
       sha256: "hash",
-      generation: "123",
-      approval: { status: "APPROVED", sha256: "hash", generation: "123" },
-      scan: { status: "CLEAN", sha256: "hash" }
+      generation: "123"
     },
     ...overrides
   };
@@ -238,10 +236,7 @@ describe("SchedulerTickService — execution metadata snapshot (AVL-2)", () => {
       artifact: {
         uri: "gs://bucket/approved/risk-score/hash/job.zip",
         sha256: "hash",
-        generation: "123",
-        approval: { status: "APPROVED", sha256: "hash", generation: "123" },
-        scan: { status: "CLEAN", sha256: "hash" },
-        revoked: undefined
+        generation: "123"
       }
     });
   });

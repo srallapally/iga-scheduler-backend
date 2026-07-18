@@ -323,13 +323,11 @@ describe("LocalDefinitionService", () => {
     }
   }
 
-  it("createDefinition writes artifact to disk, stores metadata in SQLite, and auto-seeds trust fields", async () => {
+  it("createDefinition writes artifact to disk and stores metadata in SQLite", async () => {
     const artifact = await makeMinimalZip();
     const doc = await service.createDefinition({ metadata: VALID_METADATA, artifactBuffer: artifact });
     expect(doc.definitionId).toBe("def-test");
     expect(doc.state).toBe("ACTIVE");
-    expect(doc.jobZip.approval.status).toBe("APPROVED");
-    expect(doc.jobZip.scan.status).toBe("CLEAN");
     expect(doc.jobZip.uri).toMatch(/^local:\/\//);
     // Artifact file must exist on disk
     const { existsSync } = await import("fs");

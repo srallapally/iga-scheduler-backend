@@ -25,7 +25,7 @@ Priority legend:
 | AVL-1 | P1 | Worker runs jobs as fire-and-forget subprocess; killed on every deploy/scale-in | Availability / lifecycle | By inspection | Open |
 | AVL-2 | P1 | ES on the dispatch hot path; ES blip permanently fails in-flight dispatches | Availability | By inspection | Open |
 | AVL-3 | P1 | Scheduler service lacks always-on CPU; dispatch/sweep loops stall to tick cadence | Availability | Verified | Open |
-| CIP-1 | P1 | CI runs no tests | CI / process | Verified | Open |
+| CIP-1 | P1 | CI runs no tests | CI / process | Verified | **Resolved** — this PR, ADR 0010. CIP-2 (hermetic PG-backed CI so the 28 skipped tests run) remains a separate follow-on |
 | SEC-5 | P2 | `publicAuth` trusts JWT-header `alg`, nullifying algorithm allowlist | Security / defense-in-depth | By inspection | Open |
 | COR-4 | P2 | No automatic retry despite full retry-classification machinery | Correctness | By inspection | Open |
 | COR-5 | P2 | Stale sweeper keys off `started_at`, not `heartbeat_at`; hard job ceiling | Correctness | By inspection | Open |
@@ -109,10 +109,11 @@ Priority legend:
 **What:** Dispatcher 5s poll and sweeper execute only during request handling → degrade to once-per-minute tick cadence; the service can scale to zero, making the control loop's liveness depend on incidental traffic.
 **Fix:** Add `--min-instances=1 --no-cpu-throttling` to the scheduler deploy, or externalize the loops.
 
-### CIP-1 — CI runs no tests
+### CIP-1 — CI runs no tests — **Resolved**
 **Where:** `cloudbuild.yaml` (terraform → docker build → migrate → deploy; no test step). `npm test` exists only as a CLAUDE.md session rule.
 **What:** No mechanical gate between a regression and production — acute given how much of this system is state-machine correctness.
 **Fix:** Add a test step before image build; fail the build on non-zero. Depends on CIP-2 for reliability.
+**Resolution:** A `node:22-slim` test step (`npm ci && npm test`) now runs in `cloudbuild.yaml` right after the Terraform-outputs step and before any Docker build — fails fast, before any image is built/pushed/deployed. The 4 previously-failing tests in `test/worker-execution-metadata.test.js` are fixed: the actual cause was the test's own `serviceWithDefinition` helper omitting `definitionsIndex` (not cross-test env leakage as originally guessed), which made `WorkerRunService`'s lazy `getConfig()` fallback throw in any environment without `GCP_PROJECT_ID`/`JOB_ZIP_BUCKET`/`ES_ENDPOINT`/`ES_API_KEY` set. `npm test` is now fully green (0 failures, 28 pre-existing PG-integration tests still skip without `TEST_DATABASE_URL`, as before). See `docs/adr/0010-ci-test-gate.md`. **Residual:** CIP-2 (wiring a live Postgres into this CI step so those 28 tests run instead of skip) remains open, tracked separately.
 
 ---
 

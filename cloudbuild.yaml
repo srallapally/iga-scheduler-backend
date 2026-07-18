@@ -34,6 +34,20 @@ steps:
           -backend-config="prefix=iga-scheduler"
         terraform output -json > /workspace/tf-outputs.json
 
+  # ── Run test suite ───────────────────────────────────────────────────────────
+  # Fails the build before any image is built, pushed, or deployed. Does not
+  # need a live Postgres — PG-integration tests skip gracefully without
+  # TEST_DATABASE_URL (wiring a real DB into this step so they run instead of
+  # skip is CIP-2, tracked separately).
+  - name: node:22-slim
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -euo pipefail
+        npm ci
+        npm test
+
   # ── Worker service image ────────────────────────────────────────────────────
   - name: gcr.io/cloud-builders/docker
     args:

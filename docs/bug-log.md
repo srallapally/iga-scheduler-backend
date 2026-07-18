@@ -30,7 +30,7 @@ Priority legend:
 | COR-4 | P2 | No automatic retry despite full retry-classification machinery | Correctness | By inspection | Open |
 | COR-5 | P2 | Stale sweeper keys off `started_at`, not `heartbeat_at`; hard job ceiling | Correctness | By inspection | Open |
 | COR-6 | P2 | Misfire policy replays every missed occurrence after an outage | Correctness | By inspection | Open |
-| COR-7 | P1 | Definition delete does not cascade; orphaned instances fail-loop forever | Correctness | Verified | Open |
+| COR-7 | P1 | Definition delete does not cascade; orphaned instances fail-loop forever | Correctness | Verified | **Resolved** — this PR, ADR 0012 |
 | CIP-2 | P2 | Test suite not hermetic; PG store tests skip silently without a database | CI / test integrity | Verified | Open |
 | SEC-6 | P2 | Self-asserted approval/scan presented as a trust chain | Security / control theatre | Verified | Open |
 | OPS-1 | P2 | GCS bucket missing `public_access_prevention = "enforced"` | Hardening | Verified | Open |
@@ -89,10 +89,11 @@ Priority legend:
 **What:** The only way to update job code is delete + re-POST the same `definitionId`, which returns version 1 again — so pinned instances execute different code under the same pinned version. The digest changes in `jobZip.sha256` (forensically reconstructable), but the pinning mechanism designed to catch this is blind to it.
 **Fix:** Increment version on re-upload (digest-keyed GCS paths already allow coexisting artifacts), or remove the pinning fields so nothing falsely relies on them.
 
-### COR-7 — Definition delete does not cascade
+### COR-7 — Definition delete does not cascade — **Resolved**
 **Where:** `src/services/jobDefinitionService.js:151-163` (marks ES doc DELETED); instances left ACTIVE.
 **What:** Every subsequent fire creates a run that permanently fails at dispatch (`DEFINITION_NOT_ACTIVE`, non-retryable) — a failed-run generator on every cron interval until someone manually pauses instances.
 **Fix:** On delete, pause or refuse while active instances reference the definition (the instance-by-definition listing already exists).
+**Resolution:** `deleteDefinition` now refuses (`DEFINITION_HAS_ACTIVE_INSTANCES`, HTTP 409) when any enabled/`ACTIVE` instance still references the definition, using the existing `listInstancesForDefinition` query — no new query needed. `src/app.js` now wires `instanceStore` into `JobDefinitionService` and passes `jobDefinitionService` into `createApp()` (previously never passed, so the route silently used a bare default with no cascade awareness). See `docs/adr/0012-definition-delete-cascade.md`.
 
 ### AVL-1 — Worker execution model fights Cloud Run lifecycle
 **Where:** `src/workers/workerApp.js:55` (202 + background subprocess); `terraform/worker_service.tf` (`timeout` comment misattributes drain protection).

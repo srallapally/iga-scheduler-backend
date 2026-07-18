@@ -6,12 +6,13 @@ import { validateZipBuffer } from "../utils/zipValidation.js";
 import { createJobDefinitionSchema, patchJobDefinitionSchema } from "../validation/jobDefinitionSchema.js";
 
 export class JobDefinitionService {
-  constructor({ esClient = createEsClient(), storage = createStorageClient(), config = getConfig() } = {}) {
+  constructor({ esClient = createEsClient(), storage = createStorageClient(), config = getConfig(), instanceStore = null } = {}) {
     this.es = esClient;
     this.storage = storage;
     this.config = config;
     this.bucket = storage.bucket(config.jobZipBucket);
     this.index = config.definitionsIndex;
+    this.instanceStore = instanceStore;
   }
 
   async createDefinition({ metadata, artifactBuffer }) {
@@ -149,6 +150,19 @@ export class JobDefinitionService {
   }
 
   async deleteDefinition(definitionId) {
+    if (this.instanceStore) {
+      const instances = await this.instanceStore.listInstancesForDefinition(definitionId);
+      const activeInstances = instances.filter((instance) => instance.enabled && instance.state === "ACTIVE");
+      if (activeInstances.length > 0) {
+        const error = new Error(
+          `definition ${definitionId} has ${activeInstances.length} active instance(s) referencing it; pause or delete them before deleting the definition`
+        );
+        error.code = "DEFINITION_HAS_ACTIVE_INSTANCES";
+        error.statusCode = 409;
+        throw error;
+      }
+    }
+
     await this.es.update({
       index: this.index,
       id: definitionId,

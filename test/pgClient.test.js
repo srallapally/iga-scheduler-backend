@@ -1,7 +1,19 @@
-import { describe, expect, it, beforeAll, afterAll } from "vitest";
-import { createPgPool } from "../src/clients/pgClient.js";
+import { describe, expect, it, vi, beforeAll, afterAll } from "vitest";
+import { createPgPool, resolveCloudSqlPassword } from "../src/clients/pgClient.js";
 import { validateProductionStartupConfig } from "../src/config/productionValidation.js";
 import { pgAvailable, TEST_DATABASE_URL, createTestPool, applyMigrations, revertMigrations } from "./helpers/pg.js";
+
+function createSecretManagerClient(value = "fetched-secret") {
+  return {
+    accessSecretVersion: vi.fn(async () => [{
+      payload: { data: Buffer.from(value, "utf8") }
+    }])
+  };
+}
+
+function fakeConnector(clientOpts = {}) {
+  return { getOptions: vi.fn(async () => clientOpts) };
+}
 
 // ---------------------------------------------------------------------------
 // pgClient — engine validation (no PG required)
@@ -34,6 +46,114 @@ describe("createPgPool — engine validation", () => {
     await expect(
       createPgPool({ env: { DB_ENGINE: "cloud-sql", DB_INSTANCE_CONNECTION_NAME: "proj:region:inst", DB_USER: "u" } })
     ).rejects.toThrow("DB_NAME is required for DB_ENGINE=cloud-sql");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// resolveCloudSqlPassword — Secret Manager fetch, not process.env (SEC-4)
+// ---------------------------------------------------------------------------
+
+describe("resolveCloudSqlPassword", () => {
+  it("returns undefined when DB_PASSWORD_SECRET is unset (IAM auth mode)", async () => {
+    const client = createSecretManagerClient();
+    const result = await resolveCloudSqlPassword({ env: { DB_PASSWORD: "should-be-ignored" }, client });
+    expect(result).toBeUndefined();
+    expect(client.accessSecretVersion).not.toHaveBeenCalled();
+  });
+
+  it("fetches a bare secret id using GCP_PROJECT_ID", async () => {
+    const client = createSecretManagerClient("db-secret-value");
+    const result = await resolveCloudSqlPassword({
+      env: { GCP_PROJECT_ID: "proj-1", DB_PASSWORD_SECRET: "iga-scheduler-db-password" },
+      client
+    });
+    expect(result).toBe("db-secret-value");
+    expect(client.accessSecretVersion).toHaveBeenCalledWith({
+      name: "projects/proj-1/secrets/iga-scheduler-db-password/versions/latest"
+    });
+  });
+
+  it("throws when a bare secret id is used without GCP_PROJECT_ID", async () => {
+    const client = createSecretManagerClient();
+    await expect(resolveCloudSqlPassword({ env: { DB_PASSWORD_SECRET: "iga-scheduler-db-password" }, client }))
+      .rejects.toThrow("GCP_PROJECT_ID is required to resolve a bare DB_PASSWORD_SECRET id");
+  });
+
+  it("uses a fully qualified secret ref unchanged", async () => {
+    const client = createSecretManagerClient("db-secret-value");
+    const result = await resolveCloudSqlPassword({
+      env: { DB_PASSWORD_SECRET: "projects/proj-1/secrets/db-pw/versions/5" },
+      client
+    });
+    expect(result).toBe("db-secret-value");
+    expect(client.accessSecretVersion).toHaveBeenCalledWith({
+      name: "projects/proj-1/secrets/db-pw/versions/5"
+    });
+  });
+
+  it("adds /versions/latest to a fully qualified ref without a version", async () => {
+    const client = createSecretManagerClient("db-secret-value");
+    await resolveCloudSqlPassword({ env: { DB_PASSWORD_SECRET: "projects/proj-1/secrets/db-pw" }, client });
+    expect(client.accessSecretVersion).toHaveBeenCalledWith({
+      name: "projects/proj-1/secrets/db-pw/versions/latest"
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// createPgPool — cloud-sql password comes from Secret Manager, not env.DB_PASSWORD
+// ---------------------------------------------------------------------------
+
+describe("createPgPool — cloud-sql password sourcing (SEC-4)", () => {
+  it("uses the fetched Secret Manager value as the pool password, ignoring env.DB_PASSWORD", async () => {
+    const secretManagerClient = createSecretManagerClient("fetched-db-password");
+    const connector = fakeConnector({ host: "127.0.0.1", port: 5432 });
+
+    const pool = await createPgPool({
+      env: {
+        DB_ENGINE: "cloud-sql",
+        DB_INSTANCE_CONNECTION_NAME: "proj:region:inst",
+        DB_USER: "app",
+        DB_NAME: "scheduler",
+        DB_PASSWORD_SECRET: "iga-scheduler-db-password",
+        GCP_PROJECT_ID: "proj-1",
+        DB_PASSWORD: "leaked-if-used"
+      },
+      secretManagerClient,
+      connector
+    });
+
+    try {
+      expect(pool.options.password).toBe("fetched-db-password");
+      expect(secretManagerClient.accessSecretVersion).toHaveBeenCalledWith({
+        name: "projects/proj-1/secrets/iga-scheduler-db-password/versions/latest"
+      });
+    } finally {
+      await pool.end();
+    }
+  });
+
+  it("creates a pool with no password when DB_PASSWORD_SECRET is unset (IAM auth mode)", async () => {
+    const secretManagerClient = createSecretManagerClient();
+    const connector = fakeConnector({ host: "127.0.0.1", port: 5432 });
+
+    const pool = await createPgPool({
+      env: {
+        DB_ENGINE: "cloud-sql",
+        DB_INSTANCE_CONNECTION_NAME: "proj:region:inst",
+        DB_USER: "app",
+        DB_NAME: "scheduler"
+      },
+      secretManagerClient,
+      connector
+    });
+
+    try {
+      expect(pool.options.password).toBeUndefined();
+      expect(secretManagerClient.accessSecretVersion).not.toHaveBeenCalled();
+    } finally {
+      await pool.end();
+    }
   });
 });
 

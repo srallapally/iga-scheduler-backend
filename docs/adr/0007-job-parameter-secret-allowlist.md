@@ -16,6 +16,8 @@ includes the platform's own secrets: `iga-scheduler-db-password`,
 `iga-scheduler-iga-client-id`, `iga-scheduler-iga-client-secret`,
 `iga-scheduler-es-api-key`, and `iga-scheduler-github-token`.
 
+This ADR is implemented in PR #54.
+
 `toSecretVersionName` previously accepted any secret the resolving identity
 could read, in either of two forms: a bare secret id (`iga-api-key` →
 `projects/{proj}/secrets/iga-api-key/versions/latest`) or a fully-qualified

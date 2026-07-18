@@ -16,7 +16,7 @@ Priority legend:
 | ID | Pri | Title | Area | Verify | Status |
 |----|-----|-------|------|--------|--------|
 | SEC-1 | P0 | IGA client secret injected into untrusted job subprocess env | Security / credential boundary | Verified | **Resolved** — PR #52 (`ea8dbc7`), ADR 0006 |
-| SEC-2 | P0 | `secretRef` resolution has no allowlist — jobs can read platform secrets | Security / credential boundary | Verified | **Resolved (app-layer)** — this PR, ADR 0007. Soft control: IAM follow-on (scoped resolver SA) still open |
+| SEC-2 | P0 | `secretRef` resolution has no allowlist — jobs can read platform secrets | Security / credential boundary | Verified | **Resolved (app-layer)** — PR #54, ADR 0007. Soft control: IAM follow-on (scoped resolver SA) still open |
 | SEC-3 | P0 | Completion endpoint accepts runtime SA; any job can forge any run's result | Security / audit integrity | Verified | Open |
 | SEC-4 | P1 | Same-UID co-residency: job subprocess can read broker `/proc/1/environ` | Security / isolation | By inspection | Open — the SEC-1 fix removes the IGA secret from the worker's own env so there's nothing for a co-residency read to find there, but SEC-4 itself (the read primitive) is unaddressed; other worker secrets (e.g. `DB_PASSWORD`) remain readable this way until SEC-4 is fixed |
 | COR-1 | P1 | No fencing token: a ghost subprocess can complete a re-dispatched run | Correctness / concurrency | By inspection | Open |

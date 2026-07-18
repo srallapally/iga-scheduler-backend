@@ -17,7 +17,7 @@ Priority legend:
 |----|-----|-------|------|--------|--------|
 | SEC-1 | P0 | IGA client secret injected into untrusted job subprocess env | Security / credential boundary | Verified | **Resolved** — PR #52 (`ea8dbc7`), ADR 0006 |
 | SEC-2 | P0 | `secretRef` resolution has no allowlist — jobs can read platform secrets | Security / credential boundary | Verified | **Resolved (app-layer)** — PR #54, ADR 0007. Soft control: IAM follow-on (scoped resolver SA) still open |
-| SEC-3 | P0 | Completion endpoint accepts runtime SA; any job can forge any run's result | Security / audit integrity | Verified | Open |
+| SEC-3 | P0 | Completion endpoint accepts runtime SA; any job can forge any run's result | Security / audit integrity | Verified | **Resolved** — PR #55, ADR 0008. Route removed; sibling-route principal concern remains a separate follow-on |
 | SEC-4 | P1 | Same-UID co-residency: job subprocess can read broker `/proc/1/environ` | Security / isolation | By inspection | Open — the SEC-1 fix removes the IGA secret from the worker's own env so there's nothing for a co-residency read to find there, but SEC-4 itself (the read primitive) is unaddressed; other worker secrets (e.g. `DB_PASSWORD`) remain readable this way until SEC-4 is fixed |
 | COR-1 | P1 | No fencing token: a ghost subprocess can complete a re-dispatched run | Correctness / concurrency | By inspection | Open |
 | COR-2 | P1 | Cancellation records CANCELLED while side effects fully execute | Correctness / audit integrity | Verified | Open |
@@ -57,11 +57,12 @@ Priority legend:
 **Fix:** Constrain `toSecretVersionName` to a dedicated prefix (e.g. `job-params-*`), or resolve job parameters under a separate SA scoped to job-parameter secrets only.
 **Resolution:** `toSecretVersionName` now parses both `secretRef` forms down to a concrete secret id before any check runs (so the fully-qualified form can no longer bypass a prefix check), refuses a fixed denylist of the five known platform secret ids unconditionally, and otherwise requires the id to start with `SECRET_PARAM_PREFIX` (default `job-param-`); cross-project fully-qualified refs are refused. No `accessSecretVersion` call is made on a refused id. See `docs/adr/0007-job-parameter-secret-allowlist.md`. **This is a soft control**: the resolving SA's IAM grant is unchanged and still holds `secretAccessor` on the platform secrets — the enforced version of this boundary (a separate resolver identity scoped to job-parameter secrets only) is a tracked follow-on, not done here.
 
-### SEC-3 — Completion endpoint accepts runtime SA; jobs are runtime SA
+### SEC-3 — Completion endpoint accepts runtime SA; jobs are runtime SA — **Resolved**
 **Where:** `src/routes/internalWorker.js:10-12` (`completionAuth` fallback chain puts `RUNTIME_SERVICE_ACCOUNT_EMAIL` first); `POST /internal/job-runs/:runId/complete`.
 **What:** Job subprocesses mint OIDC tokens from the metadata server as the runtime SA (the SDK does this for the IGA proxy). The completion route accepts that principal, so any job can complete **any** RUNNING run with an arbitrary result payload. Run IDs are deterministic (`instanceId:scheduledFireTime`, `src/utils/runId.js`), so targets are guessable. In production nothing legitimate calls this route — the worker writes PG directly via `onExecutionSuccess`/`onExecutionError` (`src/workers/app.js`) — so it is an armed, unused door.
 **Blast radius:** Result-integrity forgery; severe if run results feed downstream governance decisions.
 **Fix:** Remove the route, or stop accepting the runtime SA on it (require a principal that job code cannot assume).
+**Resolution:** `POST /internal/job-runs/:runId/complete` and `completionAuthMiddleware` are removed from `internalWorker.js`; the route no longer exists (a regression test asserts 404). Sibling routes (`/execute`, `/retry`, `/cancel`, `/redrive`) and their `authMiddleware` are untouched. `WorkerRunService.completeRun` and its unit tests are kept, unchanged, with no route calling it. Run outcomes now have exactly one production path: the worker's direct Postgres writes via `onExecutionSuccess`/`onExecutionError`. See `docs/adr/0008-remove-completion-route.md`. **Follow-on note:** the sibling routes still authenticate via the same implicit env-var fallback chain (`createInternalAuthMiddleware`); whether their accepted principal set is appropriate is a separate, broader finding not addressed here.
 
 ---
 

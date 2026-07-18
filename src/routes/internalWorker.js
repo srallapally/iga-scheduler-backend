@@ -7,23 +7,7 @@ export function createInternalWorkerRouter(options = {}) {
   const service = options.service || new WorkerRunService();
   let runControlService = options.runControlService;
   const authMiddleware = options.authMiddleware || createInternalAuthMiddleware(options.auth || {});
-  const completionAuthMiddleware = options.completionAuthMiddleware || createInternalAuthMiddleware(options.completionAuth || {
-    expectedAudience: process.env.RUNTIME_BROKER_URL || process.env.WORKER_OIDC_AUDIENCE || process.env.WORKER_BASE_URL,
-    expectedServiceAccountEmail: process.env.RUNTIME_SERVICE_ACCOUNT_EMAIL || process.env.WORKER_INVOKER_SERVICE_ACCOUNT_EMAIL
-  });
   const router = express.Router();
-
-  router.post("/:runId/complete", completionAuthMiddleware, async (req, res, next) => {
-    try {
-      const runId = decodeURIComponent(req.params.runId);
-      if (!runId) { res.status(400).json({ error: "runId is required" }); return; }
-      const result = await service.completeRun({ runId, completion: req.body || {} });
-      const statusCode = result.status === "skipped" ? 202 : 200;
-      res.status(statusCode).json(result);
-    } catch (error) {
-      next(error);
-    }
-  });
 
   router.use(authMiddleware);
 

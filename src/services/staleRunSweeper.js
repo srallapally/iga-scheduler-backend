@@ -1,5 +1,5 @@
 // Marks RUNNING runs as FAILED when the worker that claimed them has disappeared
-// without calling /complete. Threshold = max job timeout + grace buffer.
+// without marking the run terminal. Threshold = max job timeout + grace buffer.
 export class StaleRunSweeper {
   constructor({
     runStore,
@@ -55,7 +55,7 @@ export class StaleRunSweeper {
         const marked = await this.runStore.markFailed({
           runId,
           endedAt: new Date().toISOString(),
-          error: { code: "STALE_RUNNING", message: "Run marked failed by stale-run sweeper: worker did not call /complete within the timeout window", retryable: false },
+          error: { code: "STALE_RUNNING", message: "Run marked failed by stale-run sweeper: worker did not mark the run terminal within the timeout window", retryable: false },
           status: { phase: "failed", message: "Run timed out — worker did not complete within the allowed window" }
         });
         if (marked) {

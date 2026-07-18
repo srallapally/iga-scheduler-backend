@@ -43,7 +43,9 @@ export async function startApplication({ pool: injectedPool } = {}) {
   // Reuses the same launcher instance dispatch uses, so cancellation targets
   // the same worker service (COR-2).
   const runControlService = new RunControlService({ runStore, runtimeLauncher: isolatedRuntimeLauncher });
-  const tickService = new SchedulerTickService({ instanceStore, runStore, pool });
+  // jobDefinitionService lets tick snapshot artifact/definition metadata onto
+  // each run row, so dispatch never has to call ES itself (AVL-2).
+  const tickService = new SchedulerTickService({ instanceStore, runStore, pool, definitionService: jobDefinitionService });
   const dispatcher = new RunDispatcher({
     runStore,
     workerRunService,

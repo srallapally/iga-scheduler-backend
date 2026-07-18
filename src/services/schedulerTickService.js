@@ -2,13 +2,18 @@ import { CronExpressionParser } from "cron-parser";
 import { buildRunId } from "../utils/runId.js";
 
 export class SchedulerTickService {
-  constructor({ instanceStore, runStore, pool, now = () => new Date(), batchSize = 100 } = {}) {
+  constructor({ instanceStore, runStore, pool, definitionService = null, now = () => new Date(), batchSize = 100 } = {}) {
     if (!instanceStore) throw new Error("instanceStore is required");
     if (!runStore) throw new Error("runStore is required");
     if (!pool) throw new Error("pool is required");
     this.instanceStore = instanceStore;
     this.runStore = runStore;
     this.pool = pool;
+    // Optional: when provided, tick snapshots artifact/definition metadata onto
+    // the run row so dispatch never has to call ES on the hot path (AVL-2).
+    // When absent, runs are created without a snapshot and WorkerRunService
+    // falls back to its own live definition lookup, matching prior behavior.
+    this.definitionService = definitionService;
     this.now = now;
     this.batchSize = batchSize;
   }
@@ -39,7 +44,10 @@ export class SchedulerTickService {
           // compute next fire first — cron parse errors abort this instance before any writes
           const nextFireAt = this.computeNextFireAt({ expression: this.getCronExpression(instance.schedule), timezone: instance.schedule?.timezone, scheduledFireTime });
           const runId = buildRunId({ tenantId: instance.tenantId, instanceId: instance.instanceId, scheduledFireTime });
-          const runDoc = this.buildRunDocument({ runId, instance, scheduledFireTime, nowIso });
+          const executionMetadata = this.definitionService
+            ? await this.buildExecutionMetadataSnapshot(instance.definitionId)
+            : undefined;
+          const runDoc = this.buildRunDocument({ runId, instance, scheduledFireTime, nowIso, executionMetadata });
           const { created } = await this.runStore.createRunTx(client, runDoc);
           if (created) { summary.createdRuns++; } else { summary.duplicates++; }
           await this.instanceStore.advanceInstance(client, { instanceId: instance.instanceId, lastFireAt: scheduledFireTime, nextFireAt, nowIso });
@@ -62,7 +70,7 @@ export class SchedulerTickService {
     return summary;
   }
 
-  buildRunDocument({ runId, instance, scheduledFireTime, nowIso }) {
+  buildRunDocument({ runId, instance, scheduledFireTime, nowIso, executionMetadata }) {
     return {
       runId,
       tenantId: instance.tenantId,
@@ -73,6 +81,7 @@ export class SchedulerTickService {
       state: "QUEUED",
       attempt: 1,
       params: instance.params || instance.parameters || {},
+      executionMetadata,
       createdAt: nowIso,
       updatedAt: nowIso,
       startedAt: null,
@@ -82,6 +91,41 @@ export class SchedulerTickService {
       feedback: {},
       result: null,
       error: null
+    };
+  }
+
+  // Snapshots the definition/artifact fields WorkerRunService.buildExecutionMetadata
+  // needs at dispatch time, so dispatch never has to call ES itself (AVL-2).
+  // Deliberately does NOT throw on a missing/inactive/version-mismatched
+  // definition — that's a real, expected outcome that should still produce a
+  // run which fails at dispatch with the usual error code (preserving today's
+  // observability). Only a genuine fetch error (ES down, network) propagates,
+  // which fails just this instance for this tick — self-healing next tick.
+  async buildExecutionMetadataSnapshot(definitionId) {
+    const definition = await this.definitionService.getDefinition(definitionId);
+    if (!definition) return { definition: null, definitionEnabled: false, definitionState: null, artifact: null };
+    return {
+      definition: {
+        definitionId: definition.definitionId,
+        version: definition.version,
+        runtime: definition.runtime,
+        runtimeVersion: definition.runtimeVersion,
+        wrapperVersion: definition.wrapperVersion,
+        entrypoint: definition.entrypoint,
+        timeoutSeconds: definition.timeoutSeconds
+      },
+      definitionEnabled: definition.enabled === true,
+      definitionState: definition.state ?? null,
+      artifact: definition.jobZip
+        ? {
+          uri: definition.jobZip.uri,
+          sha256: definition.jobZip.sha256,
+          generation: definition.jobZip.generation != null ? String(definition.jobZip.generation) : null,
+          approval: definition.jobZip.approval,
+          scan: definition.jobZip.scan,
+          revoked: definition.jobZip.revoked
+        }
+        : null
     };
   }
 

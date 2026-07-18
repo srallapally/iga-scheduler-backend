@@ -170,6 +170,122 @@ describe("SchedulerTickService (unit)", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Execution metadata snapshot (AVL-2)
+// ---------------------------------------------------------------------------
+
+function activeDefinition(overrides = {}) {
+  return {
+    definitionId: "risk-score",
+    version: 1,
+    state: "ACTIVE",
+    enabled: true,
+    runtime: "javascript",
+    runtimeVersion: "nodejs22",
+    wrapperVersion: "1.0.0",
+    entrypoint: "index.js",
+    timeoutSeconds: 1800,
+    jobZip: {
+      uri: "gs://bucket/approved/risk-score/hash/job.zip",
+      sha256: "hash",
+      generation: "123",
+      approval: { status: "APPROVED", sha256: "hash", generation: "123" },
+      scan: { status: "CLEAN", sha256: "hash" }
+    },
+    ...overrides
+  };
+}
+
+function makeDefinitionService(definition = activeDefinition()) {
+  return { getDefinition: vi.fn(async () => definition) };
+}
+
+describe("SchedulerTickService — execution metadata snapshot (AVL-2)", () => {
+  it("does not fetch a definition when no definitionService is configured (default, back-compat)", async () => {
+    const pool = makeStubPool();
+    const instanceStore = makeInstanceStore([dueInstance()]);
+    const runStore = makeRunStore({ created: true });
+    const service = new SchedulerTickService({ instanceStore, runStore, pool, now: () => new Date("2026-06-03T18:01:00.000Z") });
+
+    await service.tick();
+
+    const [, runDoc] = runStore.createRunTx.mock.calls[0];
+    expect(runDoc.executionMetadata).toBeUndefined();
+  });
+
+  it("snapshots definition and artifact metadata onto the run document when configured", async () => {
+    const pool = makeStubPool();
+    const instanceStore = makeInstanceStore([dueInstance()]);
+    const runStore = makeRunStore({ created: true });
+    const definitionService = makeDefinitionService();
+    const service = new SchedulerTickService({ instanceStore, runStore, pool, definitionService, now: () => new Date("2026-06-03T18:01:00.000Z") });
+
+    await service.tick();
+
+    expect(definitionService.getDefinition).toHaveBeenCalledWith("risk-score");
+    const [, runDoc] = runStore.createRunTx.mock.calls[0];
+    expect(runDoc.executionMetadata).toEqual({
+      definition: {
+        definitionId: "risk-score",
+        version: 1,
+        runtime: "javascript",
+        runtimeVersion: "nodejs22",
+        wrapperVersion: "1.0.0",
+        entrypoint: "index.js",
+        timeoutSeconds: 1800
+      },
+      definitionEnabled: true,
+      definitionState: "ACTIVE",
+      artifact: {
+        uri: "gs://bucket/approved/risk-score/hash/job.zip",
+        sha256: "hash",
+        generation: "123",
+        approval: { status: "APPROVED", sha256: "hash", generation: "123" },
+        scan: { status: "CLEAN", sha256: "hash" },
+        revoked: undefined
+      }
+    });
+  });
+
+  it("snapshots a not-found definition without throwing — the run still creates and fails at dispatch instead", async () => {
+    const pool = makeStubPool();
+    const instanceStore = makeInstanceStore([dueInstance()]);
+    const runStore = makeRunStore({ created: true });
+    const definitionService = makeDefinitionService(null);
+    const service = new SchedulerTickService({ instanceStore, runStore, pool, definitionService, now: () => new Date("2026-06-03T18:01:00.000Z") });
+
+    const result = await service.tick();
+
+    expect(result.createdRuns).toBe(1);
+    expect(result.failed).toBe(0);
+    const [, runDoc] = runStore.createRunTx.mock.calls[0];
+    expect(runDoc.executionMetadata).toEqual({ definition: null, definitionEnabled: false, definitionState: null, artifact: null });
+  });
+
+  it("a genuine definitionService fetch error fails only that instance for this tick (self-healing)", async () => {
+    const pool = makeStubPool();
+    const badInstance = dueInstance({ instanceId: "bad-inst" });
+    const goodInstance = dueInstance({ instanceId: "good-inst" });
+    const instanceStore = makeInstanceStore([badInstance, goodInstance]);
+    const runStore = makeRunStore({ created: true });
+    let calls = 0;
+    const definitionService = {
+      getDefinition: vi.fn(async () => {
+        calls++;
+        if (calls === 1) throw new Error("ES unavailable");
+        return activeDefinition();
+      })
+    };
+    const service = new SchedulerTickService({ instanceStore, runStore, pool, definitionService, now: () => new Date("2026-06-03T18:01:00.000Z") });
+
+    const result = await service.tick();
+
+    expect(result.failed).toBe(1);
+    expect(result.createdRuns).toBe(1);
+    expect(result.checked).toBe(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Integration tests — require TEST_DATABASE_URL
 // ---------------------------------------------------------------------------
 

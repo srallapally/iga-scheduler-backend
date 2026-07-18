@@ -385,8 +385,26 @@ export class WorkerRunService {
     };
   }
 
+  // Reads the definition/artifact snapshot taken at tick time (AVL-2) when
+  // present, so dispatch never has to call ES on the hot path. Falls back to
+  // a live ES lookup when no snapshot is present (legacy runs created before
+  // this snapshot existed, or backends — e.g. local dev — that don't take one),
+  // preserving the prior behavior exactly for those cases.
   async buildExecutionMetadata({ run }) {
     if (!run.definitionId) throw this.executionMetadataError("RUN_DEFINITION_MISSING", "run definitionId is required");
+
+    if (run.executionMetadata) {
+      const snapshot = run.executionMetadata;
+      if (!snapshot.definition) throw this.executionMetadataError("DEFINITION_NOT_FOUND", `job definition ${run.definitionId} was not found`);
+      if (snapshot.definitionEnabled !== true || snapshot.definitionState !== "ACTIVE") throw this.executionMetadataError("DEFINITION_NOT_ACTIVE", `job definition ${run.definitionId} is not active`);
+      if (run.definitionVersion !== undefined && snapshot.definition.version !== run.definitionVersion) throw this.executionMetadataError("DEFINITION_VERSION_MISMATCH", `run requires definition version ${run.definitionVersion}, but current version is ${snapshot.definition.version}`);
+      if (!snapshot.artifact?.uri || !snapshot.artifact?.sha256 || !snapshot.artifact?.generation) throw this.executionMetadataError("DEFINITION_ARTIFACT_MISSING", `job definition ${run.definitionId} is missing approved artifact metadata`);
+      return {
+        definition: snapshot.definition,
+        artifact: { ...snapshot.artifact, generation: String(snapshot.artifact.generation) }
+      };
+    }
+
     const definition = await this.getDefinition(run.definitionId);
     if (!definition) throw this.executionMetadataError("DEFINITION_NOT_FOUND", `job definition ${run.definitionId} was not found`);
     if (definition.enabled !== true || definition.state !== "ACTIVE") throw this.executionMetadataError("DEFINITION_NOT_ACTIVE", `job definition ${run.definitionId} is not active`);

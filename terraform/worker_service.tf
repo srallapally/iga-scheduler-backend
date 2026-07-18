@@ -12,9 +12,15 @@ resource "google_cloud_run_v2_service" "worker" {
   template {
     service_account = google_service_account.runtime.email
 
-    # Give the SIGTERM handler time to drain active job subprocesses before
-    # Cloud Run terminates the instance. Set to worker_max_drain_seconds, which
-    # should equal (WORKER_MAX_TIMEOUT_SECONDS + 30) * 1000 ms from workerApp.js.
+    # This is Cloud Run's per-request timeout (how long a single HTTP request —
+    # /execute, /cancel, /health — may run), NOT a graceful-shutdown/drain grace
+    # period. Cloud Run's actual SIGTERM-to-SIGKILL window on scale-in/deploy is
+    # a short, platform-controlled interval that this setting does not extend
+    # (AVL-1). Since /execute responds 202 almost immediately and the job runs
+    # detached in the background (workerApp.js), this also doesn't bound job
+    # execution duration — JobRuntimeExecutor's own per-job timeout
+    # (WORKER_MAX_TIMEOUT_SECONDS) does that. Set high mainly so a slow /cancel
+    # call is never itself cut short by the request timeout.
     timeout = "${var.worker_max_drain_seconds}s"
 
     scaling {

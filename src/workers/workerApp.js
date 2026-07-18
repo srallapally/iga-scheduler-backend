@@ -7,6 +7,10 @@ export function createWorkerApp({
   workerUrl = process.env.RUNTIME_WORKER_URL,
   workerInvokerServiceAccount = process.env.WORKER_INVOKER_SERVICE_ACCOUNT_EMAIL,
   maxDrainMs = (Number(process.env.WORKER_MAX_TIMEOUT_SECONDS || 1800) + 30) * 1000,
+  // The push-based dispatch model (AVL-1) has no queue of its own — every
+  // /execute call spawns a subprocess immediately. This is the only guard
+  // against unbounded concurrent job subprocesses on one worker instance.
+  maxConcurrency = Number(process.env.WORKER_MAX_CONCURRENCY || 10),
   onExecutionError = null,
   onExecutionSuccess = null
 } = {}) {
@@ -50,6 +54,9 @@ export function createWorkerApp({
     }
     if (!context || typeof context !== "object") {
       return res.status(400).json({ error: "context is required" });
+    }
+    if (activeExecutions.size >= maxConcurrency) {
+      return res.status(503).json({ error: "worker is at max concurrency", retryable: true });
     }
 
     res.status(202).json({ status: "accepted", runId });

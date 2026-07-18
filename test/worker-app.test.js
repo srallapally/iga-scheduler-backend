@@ -128,6 +128,47 @@ describe("POST /execute", () => {
   });
 });
 
+describe("POST /execute — concurrency cap (AVL-1)", () => {
+  it("rejects a new execution retryably once maxConcurrency is reached", async () => {
+    const executor = makeExecutor({ status: "completed" }, 50);
+    const app = createWorkerApp({ executor, authMiddleware: noopAuth, maxConcurrency: 1 });
+
+    const first = await request(app).post("/execute").send({ ...VALID_BODY, runId: "run-1" });
+    expect(first.status).toBe(202);
+
+    const second = await request(app).post("/execute").send({ ...VALID_BODY, runId: "run-2" });
+    expect(second.status).toBe(503);
+    expect(second.body).toEqual({ error: "worker is at max concurrency", retryable: true });
+    expect(executor.execute).toHaveBeenCalledTimes(1);
+  });
+
+  it("accepts a new execution once a prior one has finished and freed a slot", async () => {
+    const executor = makeExecutor({ status: "completed" }, 20);
+    const app = createWorkerApp({ executor, authMiddleware: noopAuth, maxConcurrency: 1 });
+
+    const first = await request(app).post("/execute").send({ ...VALID_BODY, runId: "run-1" });
+    expect(first.status).toBe(202);
+
+    await vi.waitFor(() => expect(app.activeExecutions.size).toBe(0));
+
+    const second = await request(app).post("/execute").send({ ...VALID_BODY, runId: "run-2" });
+    expect(second.status).toBe(202);
+    expect(executor.execute).toHaveBeenCalledTimes(2);
+  });
+
+  it("defaults to a concurrency of 10 when WORKER_MAX_CONCURRENCY is unset", async () => {
+    const executor = makeExecutor({ status: "completed" }, 50);
+    const app = createWorkerApp({ executor, authMiddleware: noopAuth });
+
+    for (let i = 0; i < 10; i++) {
+      const res = await request(app).post("/execute").send({ ...VALID_BODY, runId: `run-${i}` });
+      expect(res.status).toBe(202);
+    }
+    const eleventh = await request(app).post("/execute").send({ ...VALID_BODY, runId: "run-10" });
+    expect(eleventh.status).toBe(503);
+  });
+});
+
 describe("POST /cancel/:runId (COR-2)", () => {
   it("delegates to executor.cancel and returns its result", async () => {
     const executor = { ...makeExecutor(), cancel: vi.fn(() => ({ status: "killed" })) };

@@ -325,14 +325,14 @@ describe("JobRuntimeExecutor - Python support", () => {
     expect(args).toEqual(["--max-old-space-size=256", "index.js"]);
   });
 
-  it("resolveSpawnCommand for python311 returns bare binary name", () => {
+  it("resolveSpawnCommand for python311 wraps the bare binary name with a ulimit -v memory cap (AVL-1)", () => {
     const executor = createExecutor();
     const orig = process.env.PYTHON311_BIN;
     delete process.env.PYTHON311_BIN;
     try {
       const { command, args } = executor.resolveSpawnCommand("python", "python311", "main.py", 256);
-      expect(command).toBe("python3.11");
-      expect(args).toEqual(["main.py"]);
+      expect(command).toBe("bash");
+      expect(args).toEqual(["-c", `ulimit -v ${256 * 1024}; exec "$0" "$@"`, "python3.11", "main.py"]);
     } finally {
       if (orig !== undefined) process.env.PYTHON311_BIN = orig;
     }
@@ -342,8 +342,8 @@ describe("JobRuntimeExecutor - Python support", () => {
     const executor = createExecutor();
     process.env.PYTHON311_BIN = "/opt/homebrew/bin/python3.11";
     try {
-      const { command } = executor.resolveSpawnCommand("python", "python311", "main.py", 256);
-      expect(command).toBe("/opt/homebrew/bin/python3.11");
+      const { args } = executor.resolveSpawnCommand("python", "python311", "main.py", 256);
+      expect(args).toEqual(["-c", `ulimit -v ${256 * 1024}; exec "$0" "$@"`, "/opt/homebrew/bin/python3.11", "main.py"]);
     } finally {
       delete process.env.PYTHON311_BIN;
     }
@@ -353,6 +353,38 @@ describe("JobRuntimeExecutor - Python support", () => {
     const executor = createExecutor();
     expect(() => executor.resolvePythonBinary("python310"))
       .toThrow(expect.objectContaining({ code: "RUNTIME_VERSION_UNSUPPORTED" }));
+  });
+
+  it("enforces a memory limit on Python subprocesses via ulimit -v (AVL-1)", async () => {
+    const executor = createExecutor();
+    const artifactBuffer = await createZip([
+      { name: "manifest.json", content: "{}" },
+      { name: "main.py", content: "x = bytearray(200 * 1024 * 1024)\nprint('should not get here')\n" }
+    ]);
+    await expect(executor.execute({
+      runId: "run-1",
+      run: { runId: "run-1" },
+      execution: { definition: { runtime: "python", runtimeVersion: "python311", entrypoint: "main.py", memoryMb: 64 } },
+      artifactBuffer,
+      context: {}
+    })).rejects.toMatchObject({ code: "RUNTIME_PROCESS_EXITED_NON_ZERO" });
+  });
+
+  it("Python subprocess still starts and completes normally within the memory limit", async () => {
+    const executor = createExecutor();
+    const artifactBuffer = await createZip([
+      { name: "manifest.json", content: "{}" },
+      { name: "main.py", content: "print('hello from python')\n" }
+    ]);
+    const result = await executor.execute({
+      runId: "run-1",
+      run: { runId: "run-1" },
+      execution: { definition: { runtime: "python", runtimeVersion: "python311", entrypoint: "main.py", memoryMb: 64 } },
+      artifactBuffer,
+      context: {}
+    });
+    expect(result.status).toBe("completed");
+    expect(result.stdout).toContain("hello from python");
   });
 
   it("maps RUNTIME_BROKER_URL to IGA_BROKER_URL in Python child env", async () => {

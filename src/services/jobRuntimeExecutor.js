@@ -160,7 +160,18 @@ export class JobRuntimeExecutor {
 
   resolveSpawnCommand(runtime, runtimeVersion, entrypointPath, memoryLimitMb) {
     if (runtime === "python") {
-      return { command: this.resolvePythonBinary(runtimeVersion), args: [entrypointPath] };
+      // Python has no interpreter-level memory-cap flag (unlike Node's
+      // --max-old-space-size), so enforce one via the OS instead. Passing the
+      // real binary/entrypoint as extra argv entries (not string-interpolated
+      // into the bash script) keeps this injection-safe despite the shell hop;
+      // `exec` replaces the bash process so the child's pid is still the real
+      // python process — process-group kill/timeout logic is unaffected.
+      const pythonBin = this.resolvePythonBinary(runtimeVersion);
+      const limitKb = memoryLimitMb * 1024;
+      return {
+        command: "bash",
+        args: ["-c", `ulimit -v ${limitKb}; exec "$0" "$@"`, pythonBin, entrypointPath]
+      };
     }
     return {
       command: process.execPath,

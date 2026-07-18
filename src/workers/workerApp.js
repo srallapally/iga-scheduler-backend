@@ -77,6 +77,14 @@ export function createWorkerApp({
     track(promise);
   });
 
+  // Signals the worker to terminate a tracked run's subprocess (COR-2).
+  app.post("/cancel/:runId", auth, (req, res) => {
+    const { runId } = req.params;
+    if (!runId) return res.status(400).json({ error: "runId is required" });
+    const result = executor.cancel ? executor.cancel(runId) : { status: "not_found" };
+    res.status(202).json({ runId, ...result });
+  });
+
   app.drain = drain;
   app.activeExecutions = activeExecutions;
 

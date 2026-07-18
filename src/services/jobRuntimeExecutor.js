@@ -61,6 +61,18 @@ export class JobRuntimeExecutor {
     this.maxResultOutputBytes = maxResultOutputBytes;
     this.requireRuntimeIsolation = requireRuntimeIsolation;
     this.killGraceMs = killGraceMs;
+    this._activeByRunId = new Map();
+  }
+
+  // Signals the tracked subprocess for runId to terminate (COR-2). Returns
+  // {status: "killed"} if a live execution was found, {status: "not_found"}
+  // otherwise (already finished, or never started on this instance).
+  cancel(runId) {
+    const active = this._activeByRunId.get(runId);
+    if (!active) return { status: "not_found" };
+    active.killProcessGroup("SIGTERM");
+    setTimeout(() => active.killProcessGroup("SIGKILL"), this.killGraceMs);
+    return { status: "killed" };
   }
 
   async execute({ runId, run, execution, artifactBuffer, context } = {}) {
@@ -210,12 +222,13 @@ export class JobRuntimeExecutor {
       });
       let stdout = ""; let stderr = ""; let stdoutTruncated = false; let stderrTruncated = false; let timedOut = false; let settled = false; let forceKillTimeout;
       const killProcessGroup = (signal) => { try { process.kill(-child.pid, signal); } catch { try { child.kill(signal); } catch {} } };
+      this._activeByRunId.set(runId, { killProcessGroup });
       const timeout = setTimeout(() => { timedOut = true; killProcessGroup("SIGTERM"); forceKillTimeout = setTimeout(() => { killProcessGroup("SIGKILL"); }, this.killGraceMs); }, timeoutSeconds * 1000);
       child.stdout.on("data", (chunk) => { const captured = this.appendWithLimit(stdout, chunk, this.maxStdoutBytes); stdout = captured.value; stdoutTruncated ||= captured.truncated; });
       child.stderr.on("data", (chunk) => { const captured = this.appendWithLimit(stderr, chunk, this.maxStderrBytes); stderr = captured.value; stderrTruncated ||= captured.truncated; });
-      child.on("error", (error) => { if (settled) return; settled = true; clearTimeout(timeout); clearTimeout(forceKillTimeout); reject(this.executionError("RUNTIME_PROCESS_FAILED", error.message, { cause: error })); });
+      child.on("error", (error) => { if (settled) return; settled = true; clearTimeout(timeout); clearTimeout(forceKillTimeout); this._activeByRunId.delete(runId); reject(this.executionError("RUNTIME_PROCESS_FAILED", error.message, { cause: error })); });
       child.on("close", (exitCode, signal) => {
-        if (settled) return; settled = true; clearTimeout(timeout); clearTimeout(forceKillTimeout);
+        if (settled) return; settled = true; clearTimeout(timeout); clearTimeout(forceKillTimeout); this._activeByRunId.delete(runId);
         const endedAt = new Date().toISOString();
         let parsedResult;
         try { parsedResult = this.parseResult(stdout); } catch (error) { reject(error); return; }

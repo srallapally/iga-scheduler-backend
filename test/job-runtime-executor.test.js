@@ -117,6 +117,24 @@ describe("JobRuntimeExecutor", () => {
     await expect(executor.execute(await validRequest({ artifactBuffer: await validArtifactBuffer("process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);") }))).rejects.toMatchObject({ code: "RUNTIME_PROCESS_TIMED_OUT", retryable: true, execution: expect.objectContaining({ status: "failed", timedOut: true, timeoutSeconds: 1 }) });
   });
 
+  it("cancel() signals the tracked subprocess to terminate (COR-2)", async () => {
+    const executor = createExecutor();
+    const executePromise = executor.execute(await validRequest({ artifactBuffer: await validArtifactBuffer("setInterval(() => {}, 1000);") }));
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    const result = executor.cancel("run-1");
+    expect(result).toEqual({ status: "killed" });
+    await expect(executePromise).rejects.toMatchObject({ code: "RUNTIME_PROCESS_EXITED_NON_ZERO" });
+    // The registry entry is cleared once the process settles.
+    expect(executor.cancel("run-1")).toEqual({ status: "not_found" });
+  });
+
+  it("cancel() returns not_found for an unknown or already-finished runId", async () => {
+    const executor = createExecutor();
+    expect(executor.cancel("no-such-run")).toEqual({ status: "not_found" });
+    await executor.execute(await validRequest({ artifactBuffer: await validArtifactBuffer("console.log('done');") }));
+    expect(executor.cancel("run-1")).toEqual({ status: "not_found" });
+  });
+
   it("truncates stdout after max bytes", async () => {
     const executor = createExecutor({ maxStdoutBytes: 5 });
     const result = await executor.execute(await validRequest({ artifactBuffer: await validArtifactBuffer("process.stdout.write('123456789');") }));

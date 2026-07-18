@@ -6,6 +6,7 @@ import { createApp } from "./createApp.js";
 import { InstanceStore } from "./stores/instanceStore.js";
 import { RunStore } from "./stores/runStore.js";
 import { WorkerServiceRuntimeLauncher } from "./services/workerServiceRuntimeLauncher.js";
+import { JobDefinitionService } from "./services/jobDefinitionService.js";
 import { JobInstanceService } from "./services/jobInstanceService.js";
 import { RunDispatcher } from "./services/runDispatcher.js";
 import { StaleRunSweeper } from "./services/staleRunSweeper.js";
@@ -37,6 +38,7 @@ export async function startApplication({ pool: injectedPool } = {}) {
   });
 
   const jobInstanceService = new JobInstanceService({ instanceStore });
+  const jobDefinitionService = new JobDefinitionService({ instanceStore });
   const tickService = new SchedulerTickService({ instanceStore, runStore, pool });
   const dispatcher = new RunDispatcher({
     runStore,
@@ -67,6 +69,7 @@ export async function startApplication({ pool: injectedPool } = {}) {
     runStore,
     esClient,
     jobInstanceService,
+    jobDefinitionService,
     internalSchedulerOptions: { service: tickService }
   });
 

@@ -65,15 +65,22 @@ function createStorageMock({ generation = "123" } = {}) {
   };
 }
 
-function createService({ esClient, storageMock }) {
+function createService({ esClient, storageMock, instanceStore }) {
   return new JobDefinitionService({
     esClient,
     storage: storageMock.storage,
     config: {
       jobZipBucket: "job-bucket",
       definitionsIndex: "scheduler_definitions_v1"
-    }
+    },
+    instanceStore
   });
+}
+
+function createInstanceStoreMock(instances = []) {
+  return {
+    listInstancesForDefinition: vi.fn(async () => instances)
+  };
 }
 
 describe("JobDefinitionService", () => {
@@ -154,5 +161,68 @@ describe("JobDefinitionService", () => {
     })).rejects.toThrow("es unavailable");
 
     expect(storageMock.file.delete).toHaveBeenCalledWith({ ignoreNotFound: true });
+  });
+});
+
+describe("JobDefinitionService — deleteDefinition cascade (COR-7)", () => {
+  it("refuses to delete a definition with an active, enabled instance referencing it", async () => {
+    const storageMock = createStorageMock();
+    const esClient = { update: vi.fn(async () => ({ result: "updated" })) };
+    const instanceStore = createInstanceStoreMock([
+      { instanceId: "risk-score-prod-hourly", definitionId: "risk-score", enabled: true, state: "ACTIVE" }
+    ]);
+    const service = createService({ esClient, storageMock, instanceStore });
+
+    await expect(service.deleteDefinition("risk-score")).rejects.toMatchObject({
+      code: "DEFINITION_HAS_ACTIVE_INSTANCES",
+      statusCode: 409
+    });
+
+    expect(instanceStore.listInstancesForDefinition).toHaveBeenCalledWith("risk-score");
+    expect(esClient.update).not.toHaveBeenCalled();
+  });
+
+  it("allows delete when all referencing instances are paused/disabled", async () => {
+    const storageMock = createStorageMock();
+    const esClient = {
+      update: vi.fn(async () => ({ result: "updated" })),
+      get: vi.fn(async () => ({ _source: { definitionId: "risk-score", state: "DELETED" } }))
+    };
+    const instanceStore = createInstanceStoreMock([
+      { instanceId: "risk-score-prod-hourly", definitionId: "risk-score", enabled: false, state: "PAUSED" }
+    ]);
+    const service = createService({ esClient, storageMock, instanceStore });
+
+    const result = await service.deleteDefinition("risk-score");
+
+    expect(esClient.update).toHaveBeenCalledTimes(1);
+    expect(result.state).toBe("DELETED");
+  });
+
+  it("allows delete when no instances reference the definition", async () => {
+    const storageMock = createStorageMock();
+    const esClient = {
+      update: vi.fn(async () => ({ result: "updated" })),
+      get: vi.fn(async () => ({ _source: { definitionId: "risk-score", state: "DELETED" } }))
+    };
+    const instanceStore = createInstanceStoreMock([]);
+    const service = createService({ esClient, storageMock, instanceStore });
+
+    await service.deleteDefinition("risk-score");
+
+    expect(esClient.update).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips the cascade check entirely when no instanceStore is configured (back-compat)", async () => {
+    const storageMock = createStorageMock();
+    const esClient = {
+      update: vi.fn(async () => ({ result: "updated" })),
+      get: vi.fn(async () => ({ _source: { definitionId: "risk-score", state: "DELETED" } }))
+    };
+    const service = createService({ esClient, storageMock });
+
+    await service.deleteDefinition("risk-score");
+
+    expect(esClient.update).toHaveBeenCalledTimes(1);
   });
 });

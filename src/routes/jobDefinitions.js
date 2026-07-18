@@ -79,6 +79,10 @@ function handleError(res, error) {
     });
   }
 
+  if (error.code === "DEFINITION_HAS_ACTIVE_INSTANCES") {
+    return res.status(409).json({ error: error.message, code: error.code });
+  }
+
   if (error.meta?.statusCode === 409) {
     return res.status(409).json({ error: "definition already exists" });
   }

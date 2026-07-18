@@ -35,7 +35,7 @@ Priority legend:
 | CIP-2 | P2 | Test suite not hermetic; PG store tests skip silently without a database | CI / test integrity | Verified | Open |
 | SEC-6 | P2 | Self-asserted approval/scan presented as a trust chain | Security / control theatre | Verified | **Resolved** — this PR, ADR 0021. Fields dropped rather than backed by a real workflow |
 | SEC-7 | P2 | IGA proxy does not bind caller to run; audit attribution forgeable across concurrent runs | Security / audit integrity | Verified | **Resolved** — this PR, ADR 0018 |
-| OPS-1 | P2 | GCS bucket missing `public_access_prevention = "enforced"` | Hardening | Verified | Open |
+| OPS-1 | P2 | GCS bucket missing `public_access_prevention = "enforced"` | Hardening | Verified | **Resolved** — this PR, ADR 0023 |
 | SCA-1 | P2 | Pipeline throughput ceiling well below data-layer capacity | Scalability | By inspection | Open |
 | DBT-1 | P3 | Dead tenancy plumbing (`tenant_id`, `tenantId`) after multi-tenancy dropped | Cleanup | By inspection | Open |
 | DBT-2 | P3 | `dispatch_id` written but never read (fixing COR-1 activates it) | Cleanup | By inspection | **Resolved by COR-1** — `dispatch_id` is now read and enforced, see COR-1's entry and ADR 0014 |
@@ -174,9 +174,10 @@ Priority legend:
 **Fix:** Bind the proxy call to the run's actual dispatch attempt rather than trusting `body.runId` alone. Reused COR-1's `dispatch_id` (already minted fresh per claim and persisted on the run row) as the binding value instead of introducing a new credential type.
 **Resolution:** `dispatch_id` is now threaded from `RunStore.claimRun` through the worker's `/execute` body into `JobRuntimeExecutor.execute()`, which injects it into the job subprocess env as `IGA_SCHEDULER_DISPATCH_ID` (both Node and Python spawn paths). Both SDKs (`BrokerIgaClient` in `scheduler-sdk.js` and `iga_scheduler/iga_client.py`) read it and send it back as `dispatchId` on every proxy request. `RuntimeIgaProxyService.request()` now rejects with `IGA_RUN_DISPATCH_MISMATCH` (403) when the run has a stored `dispatch_id` and the caller's doesn't match — before any audit event is emitted, consistent with how `RUN_NOT_FOUND`/`RUN_NOT_RUNNING` already reject. The check is skipped when the run store never minted a `dispatch_id` (local dev's `LocalRunStore`), preserving today's behavior there. Side benefit: a ghost subprocess from a superseded dispatch (COR-1's concern) now also gets rejected at the IGA-proxy layer, not just at the DB-fencing layer. See `docs/adr/0018-iga-proxy-run-binding.md`. **Residual:** SEC-4 (same-container co-residency env read) is unrelated and still open — if a co-resident process can read another job's environment directly, it can still read that job's `dispatch_id`.
 
-### OPS-1 — GCS bucket hardening
+### OPS-1 — GCS bucket hardening — **Resolved**
 **Where:** `terraform/storage.tf` (uniform access + versioning present; `public_access_prevention` absent).
 **Fix:** Add `public_access_prevention = "enforced"`.
+**Resolution:** Added `public_access_prevention = "enforced"` to `google_storage_bucket.job_zip`. `uniform_bucket_level_access` only forces IAM-based access control, not the absence of a public grant — this closes that gap at the GCS platform level, independent of any IAM binding. No functional change to any existing upload/download path. See `docs/adr/0023-gcs-public-access-prevention.md`.
 
 ### SCA-1 — Pipeline throughput ceiling
 **Where:** tick (≤100/min, single txn), dispatch (10 per 5s, serial awaits w/ ES fetch each), execution (≤10 worker instances, no per-instance cap).

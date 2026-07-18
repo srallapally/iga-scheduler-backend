@@ -51,6 +51,8 @@ HTTP Routes (src/routes/)
          → GCS                 (job artifact ZIPs)
 ```
 
+Dispatch is **pull-based**, not pushed: the scheduler only ticks (creates `QUEUED` runs on a cron); the worker service polls Postgres directly, claims runs atomically, executes them in-process, and writes its own completion back to Postgres — there is no scheduler→worker HTTP hop. See `docs/architecture.md` for the full request-flow diagrams.
+
 `src/createApp.js` is the Express app factory used by both `src/app.js` (production) and tests.  
 `src/index.js` exports `SchedulerJob` — the base class for JavaScript job authors.  
 `sdk/python/` exports the equivalent Python SDK (`iga_scheduler` package).
@@ -71,15 +73,13 @@ QUEUED → RUNNING → SUCCEEDED
 
 Redrive creates a new run with `runId` appended as `:redrive:<uuid>`.
 
-### Tick and dispatch
+### Tick
 
-`SchedulerTickService` fires every minute (triggered by GCP Cloud Scheduler). It finds instances where `nextFireAt <= now`, creates `QUEUED` run rows in Postgres, and advances `nextFireAt` — all in one transaction.
-
-`RunDispatcher` polls for `QUEUED` runs and claims them via a conditional `UPDATE`. `WorkerRunService` verifies the artifact trust chain and dispatches to the `iga-job-worker` Cloud Run Service via `WorkerServiceRuntimeLauncher`.
+`SchedulerTickService` fires every minute (triggered by GCP Cloud Scheduler). It finds instances where `nextFireAt <= now`, creates `QUEUED` run rows in Postgres (snapshotting each due instance's definition/artifact metadata onto the row so the worker never needs Elasticsearch on its dispatch path), and advances `nextFireAt` — all in one transaction. The scheduler does not push runs to the worker; that's the worker's own job.
 
 ### Worker service (`iga-job-worker`)
 
-A persistent Cloud Run Service (`min-instances: 1`, CPU always allocated) that receives dispatch requests at `/execute` and runs job subprocesses directly. `JobRuntimeExecutor` handles ZIP extraction, SDK injection, and child process spawn for both JavaScript and Python jobs. Artifact ZIPs are downloaded from GCS at dispatch time if not already supplied by the caller.
+A fixed-size warm pool of Cloud Run Service instances (`--min-instances` and `--max-instances` both set to the same `worker_pool_size` — a poll loop has no inbound-request signal for Cloud Run to autoscale on, so the pool is sized deliberately rather than elastically). Each instance runs its own poll loop (`src/workers/pollLoop.js`) that atomically claims a batch of `QUEUED` runs directly from Postgres (`FOR UPDATE SKIP LOCKED`, minting a fresh fencing token per claim) and executes them in-process via `WorkerRunService`/`JobRuntimeExecutor` — ZIP extraction, SDK injection, and child process spawn for both JavaScript and Python jobs, under a configurable per-instance concurrency cap. Artifact ZIPs are downloaded from GCS and their SHA-256 verified against the pinned GCS object generation at claim time. The worker also runs a heartbeat loop that refreshes each owned run's liveness and self-cancels the subprocess (SIGTERM → SIGKILL) if an operator requests cancellation — again with no inbound HTTP call. The worker's only inbound HTTP route is `/health`.
 
 ## Project structure
 
@@ -99,11 +99,13 @@ src/
 ├── routes/                   Express routers (public + internal)
 ├── runtime/                  JS JobContext, parameters, result model
 ├── sdk/                      scheduler-sdk.js injected into JS job child processes
-├── services/                 Tick, dispatch, worker, run control, proxy
+├── services/                 Tick, worker run execution, run control, IGA proxy
 ├── stores/                   Postgres run + instance stores
 ├── utils/                    Cron, hashing, ZIP validation, run IDs
 ├── validation/               Zod schemas for request payloads
-└── workers/                  workerApp.js — the iga-job-worker Cloud Run Service
+└── workers/                  workerApp.js (health check only) + pollLoop.js
+│                             (claim/execute/heartbeat/cancel) — the
+│                             iga-job-worker Cloud Run Service
 sdk/python/                   Python SDK (iga_scheduler package)
 ├── iga_scheduler/            Package source: SchedulerJob, context, iga_client, run_job
 ├── tests/                    pytest tests
@@ -159,8 +161,8 @@ Copy `.env.example` as a starting point.
 |---|---|
 | `PUBLIC_API_ISSUER` | OAuth AS issuer — see **Choosing an authorization server** below |
 | `PUBLIC_API_AUDIENCE` | Expected JWT audience |
-| `WORKER_OIDC_AUDIENCE` | Audience for `/internal/worker/*` calls |
-| `WORKER_INVOKER_SERVICE_ACCOUNT_EMAIL` | Service account allowed to invoke worker endpoints |
+| `WORKER_OIDC_AUDIENCE` | Audience for `/internal/job-runs/*` (retry/cancel/redrive control routes) |
+| `WORKER_INVOKER_SERVICE_ACCOUNT_EMAIL` | Service account allowed to invoke those control routes |
 | `SCHEDULER_OIDC_AUDIENCE` | Audience for `/internal/scheduler/*` calls |
 | `SCHEDULER_INVOKER_SERVICE_ACCOUNT_EMAIL` | Service account allowed to invoke tick endpoint |
 
@@ -178,13 +180,15 @@ Copy `.env.example` as a starting point.
 | `DB_NAME` | Postgres database name (if `cloud-sql`) |
 | `DATABASE_URL` | Postgres URL (if `direct`) |
 | `WORKER_EXECUTION_MODE` | Must be `isolated` in production |
-| `RUNTIME_WORKER_URL` | URL of the `iga-job-worker` Cloud Run Service |
 | `RUNTIME_SERVICE_ACCOUNT_EMAIL` | Service account running the worker service |
-| `RUNTIME_BROKER_URL` | Scheduler service URL (callback for run completion + IGA proxy) |
+| `RUNTIME_BROKER_URL` | Scheduler service URL — the IGA proxy the worker's job subprocesses call back to (`/internal/runtime/iga/request`) |
 | `IGA_TOKEN_ENDPOINT` | IGA OAuth token endpoint |
 | `IGA_CLIENT_ID` | IGA client ID |
 | `IGA_CLIENT_SECRET` | IGA client secret (or Secret Manager reference `projects/...`) |
 | `IGA_BASE_URL` | IGA API base URL |
+| `PUBLIC_API_ALGORITHMS` | Optional, comma-separated JWT algorithm allowlist (default `RS256,ES256,PS256` — covers both PingOne and AIC) |
+
+Dispatch is pull-based: the worker polls Postgres directly and has no `/execute` endpoint, so there's no `RUNTIME_WORKER_URL`/worker-invoker-audience pair to configure for that path. `GCP_PROJECT_ID`, `JOB_ZIP_BUCKET`, `ES_ENDPOINT`, and `ES_API_KEY` must be set on **both** the scheduler and worker Cloud Run services — the worker needs Elasticsearch access itself now, as a fallback for the rare run whose definition wasn't snapshotted at tick time.
 
 **Optional Python binary overrides (local dev):**
 
@@ -241,13 +245,13 @@ npm run bootstrap:prod:dry-run
 
 All GCP infrastructure is managed by Terraform in `terraform/`. Resources include:
 
-- **Networking** — VPC, Private Service Access peering, Serverless VPC Access connector (for scheduler → Cloud SQL)
-- **Cloud SQL** — PostgreSQL 15, regional HA, private IP
-- **GCS** — job artifact ZIP bucket with versioning
+- **Networking** — VPC, Private Service Access peering, Serverless VPC Access connector (for scheduler/worker → Cloud SQL)
+- **Cloud SQL** — PostgreSQL, regional HA, private IP
+- **GCS** — job artifact ZIP bucket with versioning and `public_access_prevention = "enforced"`
 - **Artifact Registry** — Docker repository for the worker service image
 - **Secret Manager** — `iga-scheduler-{db-password,iga-client-secret,es-api-key,github-token}`
 - **Service accounts** — `scheduler-service`, `runtime` (worker), `deployer` (CI/CD)
-- **Worker service** — `iga-job-worker` Cloud Run Service (min-instances=1, CPU always allocated)
+- **Worker service** — `iga-job-worker` Cloud Run Service, a fixed warm pool: `--min-instances` and `--max-instances` are both set to `worker_pool_size` (a poll loop has no inbound-request signal for Cloud Run to autoscale on, so the pool is sized deliberately rather than elastically; peak capacity is `worker_pool_size × WORKER_MAX_CONCURRENCY`)
 - **Cloud Scheduler** — minute-tick trigger for `SchedulerTickService`
 - **Cloud Build** — GitHub trigger on push to `main`, running `cloudbuild.yaml`
 
@@ -367,48 +371,45 @@ cd examples/python/alpha-users-ml-job
 zip -j alpha-users-ml.zip manifest.json job.py
 cd ../../..
 
-# Create the job definition
-curl -s -X POST http://localhost:3000/api/v1/definitions \
+# Create the job definition — metadata + artifact zip in one multipart upload
+curl -s -X POST http://localhost:3000/job-definitions \
   -H "Authorization: Bearer <token>" \
-  -H "Content-Type: application/json" \
-  -d '{
+  -F 'metadata={
     "definitionId": "alpha-users-ml",
     "name": "Alpha Users ML Anomaly Detection",
     "runtime": "python",
     "runtimeVersion": "python311",
     "entrypoint": "job.py",
-    "parameters": {
-      "pageSize":      { "type": "number" },
-      "contamination": { "type": "number" },
-      "fields":        { "type": "string" }
-    }
-  }'
+    "parameters": [
+      { "name": "pageSize",      "type": "string", "required": true },
+      { "name": "contamination", "type": "string", "required": true },
+      { "name": "fields",        "type": "string", "required": false }
+    ]
+  };type=application/json' \
+  -F "artifact=@examples/python/alpha-users-ml-job/alpha-users-ml.zip;type=application/zip"
 
-# Upload the artifact ZIP
-curl -s -X PUT http://localhost:3000/api/v1/definitions/alpha-users-ml/artifact \
-  -H "Authorization: Bearer <token>" \
-  -H "Content-Type: application/zip" \
-  --data-binary @examples/python/alpha-users-ml-job/alpha-users-ml.zip
-
-# Trigger run-now (requires an instance to exist, or use the run-now endpoint)
-curl -s -X POST http://localhost:3000/api/v1/instances \
+# Create a cron instance for the definition
+curl -s -X POST http://localhost:3000/job-definitions/alpha-users-ml/instances \
   -H "Authorization: Bearer <token>" \
   -H "Content-Type: application/json" \
   -d '{
     "instanceId": "alpha-users-ml-nightly",
-    "definitionId": "alpha-users-ml",
-    "cronExpression": "0 2 * * *",
-    "params": { "pageSize": 50, "contamination": 0.05 }
+    "schedule": { "type": "cron", "expression": "0 2 * * *", "timezone": "UTC" },
+    "parameters": {
+      "pageSize":      { "type": "string", "value": "50" },
+      "contamination": { "type": "string", "value": "0.05" }
+    }
   }'
 
-curl -s -X POST http://localhost:3000/api/v1/instances/alpha-users-ml-nightly/run-now \
+# Trigger it immediately instead of waiting for the cron schedule
+curl -s -X POST http://localhost:3000/job-instances/alpha-users-ml-nightly/run-now \
   -H "Authorization: Bearer <token>"
 ```
 
 Poll the run status to see results:
 
 ```bash
-curl -s http://localhost:3000/api/v1/runs/<runId> \
+curl -s http://localhost:3000/job-runs/<runId> \
   -H "Authorization: Bearer <token>" | jq .result
 ```
 
@@ -419,6 +420,8 @@ curl -s http://localhost:3000/api/v1/runs/<runId> \
 
 ## Further reading
 
+- `docs/architecture.md` — full request-flow diagrams (tick, pull-worker claim/execute/heartbeat, IGA proxy, CI/CD)
 - `docs/runbook.md` — full operator runbook (local dev, production deploy, troubleshooting)
-- `docs/adr/` — architecture decisions (Postgres-as-queue, PingOne auth)
+- `docs/adr/` — architecture decisions, one per significant change (Postgres-as-queue, PingOne auth, pull-worker execution model, and more)
+- `docs/bug-log.md` — the project's security/correctness/availability review log — what's been found, fixed, and why some items were closed as won't-fix
 - `terraform/README.md` — Terraform variables reference

@@ -8,7 +8,7 @@ function activeDefinition(overrides = {}) { return { definitionId: "risk-score",
 function createRunStore(runDoc) {
   const store = {
     _run: runDoc ? { ...runDoc } : null,
-    claimResult: { claimed: true },
+    claimResult: { claimed: true, dispatchId: "dispatch-1" },
     getRun: vi.fn(async () => store._run ? { ...store._run } : null),
     claimRun: vi.fn(async () => store.claimResult),
     recordRuntimeExecution: vi.fn(async () => true),
@@ -50,7 +50,7 @@ describe("WorkerRunService", () => {
     expect(result.result.ignoredField).toBeUndefined();
     expect(parameterResolver.resolveParameters).toHaveBeenCalledWith({ window: { type: "string", value: "PT1H" }, apiKey: { type: "sensitive", secretRef: "iga-api-key" } });
     expect(runStore.claimRun).toHaveBeenCalledWith(expect.objectContaining({ runId: "run-1" }));
-    expect(runStore.markSucceeded).toHaveBeenCalledWith(expect.objectContaining({ runId: "run-1", result: result.result }));
+    expect(runStore.markSucceeded).toHaveBeenCalledWith(expect.objectContaining({ runId: "run-1", result: result.result, dispatchId: "dispatch-1" }));
     expect(auditEventTypes(esClient)).toEqual(["worker.run.received", "worker.claim.attempted", "worker.claim.succeeded", "WORKER_RUN_STARTED", "worker.metadata.loaded", "worker.artifact.verified", "worker.execution.started", "worker.execution.succeeded"]);
   });
 
@@ -71,6 +71,18 @@ describe("WorkerRunService", () => {
     const launchRequest = isolatedRuntimeLauncher.launchExecution.mock.calls[0][0];
     expect(launchRequest.context.params).toEqual(run.params);
     expect(JSON.stringify(launchRequest.context)).not.toContain("resolved-secret");
+    expect(launchRequest.dispatchId).toBe("dispatch-1");
+    expect(runStore.recordRuntimeExecution).toHaveBeenCalledWith(expect.objectContaining({ runId: "run-1", dispatchId: "dispatch-1" }));
+  });
+
+  it("fences markFailed to the claimed dispatch attempt when dispatch fails (COR-1)", async () => {
+    const run = queuedRun();
+    const runStore = createRunStore(run);
+    const esClient = createMockEsClient();
+    const isolatedRuntimeLauncher = { launchExecution: vi.fn(async () => { throw new Error("worker unreachable"); }) };
+    const service = new WorkerRunService({ esClient, runStore, storage: {}, definitionsIndex: TEST_DEFINITIONS_INDEX, auditIndex: "scheduler_audit_v1", executionMode: "isolated", isolatedRuntimeLauncher, parameterResolver: createParameterResolver(), now: fixedClock("2026-06-03T18:01:00.000Z", "2026-06-03T18:01:05.000Z") });
+    await expect(service.executeRun({ runId: "run-1" })).rejects.toThrow("worker unreachable");
+    expect(runStore.markFailed).toHaveBeenCalledWith(expect.objectContaining({ runId: "run-1", dispatchId: "dispatch-1" }));
   });
 
   it("skips duplicate delivery when claimRun returns claimed: false", async () => {

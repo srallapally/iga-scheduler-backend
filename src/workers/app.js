@@ -12,22 +12,24 @@ export async function startWorker() {
   const runStore = new RunStore({ pool });
   const executor = new JobRuntimeExecutor();
 
-  async function onExecutionSuccess({ runId, result }) {
+  async function onExecutionSuccess({ runId, dispatchId, result }) {
     const endedAt = new Date().toISOString();
     await runStore.markSucceeded({
       runId,
+      dispatchId,
       endedAt,
       result,
       status: { phase: "succeeded", message: "Run completed successfully" }
     });
   }
 
-  async function onExecutionError({ runId, error }) {
+  async function onExecutionError({ runId, dispatchId, error }) {
     const retryClassification = classifyWorkerError(error);
     const serialized = { code: error.code, message: error.message };
     if (retryClassification) serialized.retry = retryClassification;
     await runStore.markFailed({
       runId,
+      dispatchId,
       endedAt: new Date().toISOString(),
       error: serialized,
       status: { phase: "failed", message: error.message || "Worker execution failed" }

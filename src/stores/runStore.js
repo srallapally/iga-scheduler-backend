@@ -1,3 +1,5 @@
+import { randomUUID } from "crypto";
+
 export class RunStore {
   constructor({ pool }) {
     if (!pool) throw new Error("pool is required");
@@ -20,50 +22,63 @@ export class RunStore {
     return { created: rowCount === 1 };
   }
 
+  // Mints a fresh dispatch_id on every successful claim (not just retry/redrive),
+  // so a fencing check against it can distinguish the currently-claimed attempt
+  // from a resurrected/ghost subprocess belonging to an earlier attempt (COR-1).
   async claimRun({ runId, startedAt, status }) {
+    const dispatchId = randomUUID();
     const { rows } = await this.pool.query(
       `UPDATE job_runs
-         SET state = 'RUNNING', started_at = $2, heartbeat_at = $2, status = $3, updated_at = $2
+         SET state = 'RUNNING', started_at = $2, heartbeat_at = $2, status = $3, dispatch_id = $4, updated_at = $2
        WHERE run_id = $1 AND state = 'QUEUED'
-       RETURNING run_id`,
-      [runId, startedAt, status ?? { phase: "running", message: "Run claimed by worker" }]
+       RETURNING run_id, dispatch_id`,
+      [runId, startedAt, status ?? { phase: "running", message: "Run claimed by worker" }, dispatchId]
     );
-    if (rows.length) return { claimed: true };
+    if (rows.length) return { claimed: true, dispatchId: rows[0].dispatch_id };
     const exists = await this.pool.query("SELECT 1 FROM job_runs WHERE run_id = $1", [runId]);
     return exists.rows.length ? { claimed: false } : { claimed: false, missing: true };
   }
 
-  async recordRuntimeExecution({ runId, runtimeExecution, startedAt, status }) {
+  // dispatchId is optional: when provided, the UPDATE is fenced to the exact
+  // claimed attempt so a stale/ghost caller from an earlier attempt can't
+  // clobber a later one; when omitted, behaves as before (state-only guard).
+  async recordRuntimeExecution({ runId, runtimeExecution, startedAt, status, dispatchId }) {
+    const params = [runId, runtimeExecution, startedAt, status ?? { phase: "dispatched", message: "Run dispatched to isolated runtime" }];
+    const fencing = dispatchId ? ` AND dispatch_id = $${params.push(dispatchId)}` : "";
     const { rows } = await this.pool.query(
       `UPDATE job_runs
          SET runtime_execution = $2, heartbeat_at = $3, status = $4, updated_at = $3
-       WHERE run_id = $1 AND state = 'RUNNING'
+       WHERE run_id = $1 AND state = 'RUNNING'${fencing}
        RETURNING run_id`,
-      [runId, runtimeExecution, startedAt, status ?? { phase: "dispatched", message: "Run dispatched to isolated runtime" }]
+      params
     );
     return rows.length > 0;
   }
 
-  async markSucceeded({ runId, endedAt, result, status }) {
+  async markSucceeded({ runId, endedAt, result, status, dispatchId }) {
+    const params = [runId, endedAt, status ?? { phase: "succeeded", message: "Run completed successfully" }, result ?? null];
+    const fencing = dispatchId ? ` AND dispatch_id = $${params.push(dispatchId)}` : "";
     const { rows } = await this.pool.query(
       `UPDATE job_runs
          SET state = 'SUCCEEDED', ended_at = $2, heartbeat_at = $2,
              status = $3, result = $4, error = NULL, updated_at = $2
-       WHERE run_id = $1 AND state = 'RUNNING'
+       WHERE run_id = $1 AND state = 'RUNNING'${fencing}
        RETURNING run_id`,
-      [runId, endedAt, status ?? { phase: "succeeded", message: "Run completed successfully" }, result ?? null]
+      params
     );
     return rows.length > 0;
   }
 
-  async markFailed({ runId, endedAt, error, status }) {
+  async markFailed({ runId, endedAt, error, status, dispatchId }) {
+    const params = [runId, endedAt, status ?? { phase: "failed", message: "Run failed in worker runtime executor" }, error ?? null];
+    const fencing = dispatchId ? ` AND dispatch_id = $${params.push(dispatchId)}` : "";
     const { rows } = await this.pool.query(
       `UPDATE job_runs
          SET state = 'FAILED', ended_at = $2, heartbeat_at = $2,
              status = $3, error = $4, updated_at = $2
-       WHERE run_id = $1 AND state = 'RUNNING'
+       WHERE run_id = $1 AND state = 'RUNNING'${fencing}
        RETURNING run_id`,
-      [runId, endedAt, status ?? { phase: "failed", message: "Run failed in worker runtime executor" }, error ?? null]
+      params
     );
     return rows.length > 0;
   }
@@ -97,14 +112,14 @@ export class RunStore {
 
   async listStaleRunningIds({ thresholdMs, limit = 100 } = {}) {
     const { rows } = await this.pool.query(
-      `SELECT run_id FROM job_runs
+      `SELECT run_id, dispatch_id FROM job_runs
        WHERE state = 'RUNNING'
          AND started_at < now() - ($1 * interval '1 millisecond')
        ORDER BY started_at
        LIMIT $2`,
       [thresholdMs, limit]
     );
-    return rows.map((r) => r.run_id);
+    return rows.map((r) => ({ runId: r.run_id, dispatchId: r.dispatch_id }));
   }
 
   async listStaleCancellingIds({ thresholdMs, limit = 100 } = {}) {

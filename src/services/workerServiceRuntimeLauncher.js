@@ -21,12 +21,12 @@ export class WorkerServiceRuntimeLauncher {
     this._cachedToken = null; // { token, expiresAtMs }
   }
 
-  async launchExecution({ runId, execution, context }) {
+  async launchExecution({ runId, dispatchId, execution, context }) {
     const token = await this._getToken();
-    return this._launch({ runId, execution, context }, token, true);
+    return this._launch({ runId, dispatchId, execution, context }, token, true);
   }
 
-  async _launch({ runId, execution, context }, token, retryOn401) {
+  async _launch({ runId, dispatchId, execution, context }, token, retryOn401) {
     const res = await this._fetch(`${this.workerUrl}/execute`, {
       method: "POST",
       signal: AbortSignal.timeout(this.requestTimeoutMs),
@@ -34,13 +34,13 @@ export class WorkerServiceRuntimeLauncher {
         "Content-Type": "application/json",
         Authorization: `Bearer ${token}`
       },
-      body: JSON.stringify({ runId, execution, context })
+      body: JSON.stringify({ runId, dispatchId, execution, context })
     });
 
     if (res.status === 401 && retryOn401) {
       this._cachedToken = null;
       const freshToken = await this._getToken();
-      return this._launch({ runId, execution, context }, freshToken, false);
+      return this._launch({ runId, dispatchId, execution, context }, freshToken, false);
     }
 
     if (!res.ok) {

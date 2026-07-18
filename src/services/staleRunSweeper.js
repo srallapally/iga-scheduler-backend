@@ -39,9 +39,9 @@ export class StaleRunSweeper {
   }
 
   async _sweepRunning() {
-    let runIds;
+    let staleRuns;
     try {
-      runIds = await this.runStore.listStaleRunningIds({
+      staleRuns = await this.runStore.listStaleRunningIds({
         thresholdMs: this.thresholdMs,
         limit: this.batchSize
       });
@@ -50,10 +50,11 @@ export class StaleRunSweeper {
       return;
     }
 
-    for (const runId of runIds) {
+    for (const { runId, dispatchId } of staleRuns) {
       try {
         const marked = await this.runStore.markFailed({
           runId,
+          dispatchId,
           endedAt: new Date().toISOString(),
           error: { code: "STALE_RUNNING", message: "Run marked failed by stale-run sweeper: worker did not mark the run terminal within the timeout window", retryable: false },
           status: { phase: "failed", message: "Run timed out — worker did not complete within the allowed window" }

@@ -77,8 +77,8 @@ export class WorkerRunService {
       const execution = await this.buildExecutionMetadata({ run });
       this.validateArtifactTrust({ execution });
       const context = this.buildRuntimeContext({ run, execution, params: run.params || {} });
-      const runtimeExecution = await this.isolatedRuntimeLauncher.launchExecution({ runId, run, execution, context });
-      await this.recordRuntimeExecution({ runId, runtimeExecution, startedAt });
+      const runtimeExecution = await this.isolatedRuntimeLauncher.launchExecution({ runId, dispatchId: run.dispatchId, run, execution, context });
+      await this.recordRuntimeExecution({ runId, runtimeExecution, startedAt, dispatchId: run.dispatchId });
       await this.emitAuditEvent(this.buildWorkerAuditEvent({
         eventType: "worker.execution.dispatched",
         outcome: "dispatched",
@@ -92,7 +92,7 @@ export class WorkerRunService {
     } catch (error) {
       const endedAt = this.now().toISOString();
       const retryClassification = classifyWorkerError(error);
-      await this.markFailed({ runId, endedAt, error, retryClassification });
+      await this.markFailed({ runId, endedAt, error, retryClassification, dispatchId: run.dispatchId });
       await this.emitAuditEvent(this.buildWorkerAuditEvent({
         eventType: "worker.execution.failed",
         outcome: "failure",
@@ -247,17 +247,21 @@ export class WorkerRunService {
       return { run: latestRun || run, startedAt, claim: { ...claim, state } };
     }
 
+    // Fence subsequent completion/runtime-execution writes to this exact claim
+    // attempt so a ghost subprocess from an earlier attempt can't clobber it.
+    const claimedRun = { ...run, dispatchId: claim.dispatchId };
+
     await this.emitAuditEvent(this.buildWorkerAuditEvent({
       eventType: "worker.claim.succeeded",
       outcome: "claimed",
       runId,
-      run,
+      run: claimedRun,
       createdAt: startedAt,
       details: { startedAt }
     }));
-    await this.emitAuditEvent(this.buildWorkerAuditEvent({ eventType: "WORKER_RUN_STARTED", outcome: "success", runId, run, createdAt: startedAt, details: { startedAt } }));
+    await this.emitAuditEvent(this.buildWorkerAuditEvent({ eventType: "WORKER_RUN_STARTED", outcome: "success", runId, run: claimedRun, createdAt: startedAt, details: { startedAt } }));
 
-    return { run, startedAt, claim };
+    return { run: claimedRun, startedAt, claim };
   }
 
   async executeRunLocallyInternal({ runId }) {
@@ -309,7 +313,7 @@ export class WorkerRunService {
       });
       const endedAt = this.now().toISOString();
       const normalizedResult = this.normalizeExecutionResult(result);
-      const updated = await this.markSucceeded({ runId, endedAt, result: normalizedResult });
+      const updated = await this.markSucceeded({ runId, endedAt, result: normalizedResult, dispatchId: run.dispatchId });
       if (!updated) return this.skippedResult({ runId, state: "CANCELLED" });
       await this.emitAuditEvent(this.buildWorkerAuditEvent({
         eventType: "worker.execution.succeeded",
@@ -337,7 +341,7 @@ export class WorkerRunService {
     } catch (error) {
       const endedAt = this.now().toISOString();
       const retryClassification = classifyWorkerError(error);
-      await this.markFailed({ runId, endedAt, error, retryClassification });
+      await this.markFailed({ runId, endedAt, error, retryClassification, dispatchId: run.dispatchId });
       await this.emitAuditEvent(this.buildWorkerAuditEvent({
         eventType: "worker.execution.failed",
         outcome: "failure",
@@ -482,18 +486,18 @@ export class WorkerRunService {
     return this.runStore.claimRun({ runId, startedAt });
   }
 
-  async recordRuntimeExecution({ runId, runtimeExecution, startedAt }) {
-    if (this.runStore) return this.runStore.recordRuntimeExecution({ runId, runtimeExecution, startedAt });
+  async recordRuntimeExecution({ runId, runtimeExecution, startedAt, dispatchId }) {
+    if (this.runStore) return this.runStore.recordRuntimeExecution({ runId, runtimeExecution, startedAt, dispatchId });
     throw new Error("recordRuntimeExecution requires runStore");
   }
 
-  async markSucceeded({ runId, endedAt, result }) {
-    if (this.runStore) return this.runStore.markSucceeded({ runId, endedAt, result });
+  async markSucceeded({ runId, endedAt, result, dispatchId }) {
+    if (this.runStore) return this.runStore.markSucceeded({ runId, endedAt, result, dispatchId });
     throw new Error("markSucceeded requires runStore");
   }
 
-  async markFailed({ runId, endedAt, error, retryClassification }) {
-    if (this.runStore) return this.runStore.markFailed({ runId, endedAt, error: this.serializeError(error, retryClassification) });
+  async markFailed({ runId, endedAt, error, retryClassification, dispatchId }) {
+    if (this.runStore) return this.runStore.markFailed({ runId, endedAt, error: this.serializeError(error, retryClassification), dispatchId });
     throw new Error("markFailed requires runStore");
   }
 

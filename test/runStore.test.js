@@ -68,12 +68,13 @@ describe.skipIf(!pgAvailable())("RunStore integration", () => {
     expect(await store.getRun("does-not-exist")).toBeNull();
   });
 
-  it("claimRun transitions QUEUED→RUNNING atomically", async () => {
+  it("claimRun transitions QUEUED→RUNNING atomically and mints a dispatch_id", async () => {
     const result = await store.claimRun({ runId: "run-integration-1", startedAt: "2026-06-03T18:01:00.000Z" });
-    expect(result).toEqual({ claimed: true });
+    expect(result).toEqual({ claimed: true, dispatchId: expect.any(String) });
     const run = await store.getRun("run-integration-1");
     expect(run.state).toBe("RUNNING");
     expect(run.startedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect(run.dispatchId).toBe(result.dispatchId);
   });
 
   it("claimRun on already-RUNNING run returns claimed: false (not missing)", async () => {
@@ -161,5 +162,84 @@ describe.skipIf(!pgAvailable())("RunStore integration", () => {
     expect(ok).toBe(true);
     const run = await store.getRun("run-record-1");
     expect(run.runtimeExecution).toEqual({ executionId: "exec-1", backend: "cloud-run-job" });
+  });
+
+  describe("dispatch_id fencing (COR-1)", () => {
+    it("markSucceeded with the correct dispatchId succeeds", async () => {
+      await store.createRun(makeRun({ runId: "run-fence-1" }));
+      const { dispatchId } = await store.claimRun({ runId: "run-fence-1", startedAt: "2026-06-03T18:01:00.000Z" });
+      const ok = await store.markSucceeded({ runId: "run-fence-1", endedAt: "2026-06-03T18:02:00.000Z", result: {}, dispatchId });
+      expect(ok).toBe(true);
+    });
+
+    it("markSucceeded with a stale dispatchId is fenced out", async () => {
+      await store.createRun(makeRun({ runId: "run-fence-2" }));
+      await store.claimRun({ runId: "run-fence-2", startedAt: "2026-06-03T18:01:00.000Z" });
+      const ok = await store.markSucceeded({ runId: "run-fence-2", endedAt: "2026-06-03T18:02:00.000Z", result: {}, dispatchId: "not-the-real-dispatch-id" });
+      expect(ok).toBe(false);
+      const run = await store.getRun("run-fence-2");
+      expect(run.state).toBe("RUNNING");
+    });
+
+    it("markFailed with a stale dispatchId is fenced out", async () => {
+      await store.createRun(makeRun({ runId: "run-fence-3" }));
+      await store.claimRun({ runId: "run-fence-3", startedAt: "2026-06-03T18:01:00.000Z" });
+      const ok = await store.markFailed({ runId: "run-fence-3", endedAt: "2026-06-03T18:02:00.000Z", error: { code: "ERR" }, dispatchId: "not-the-real-dispatch-id" });
+      expect(ok).toBe(false);
+    });
+
+    it("recordRuntimeExecution with a stale dispatchId is fenced out", async () => {
+      await store.createRun(makeRun({ runId: "run-fence-4" }));
+      await store.claimRun({ runId: "run-fence-4", startedAt: "2026-06-03T18:01:00.000Z" });
+      const ok = await store.recordRuntimeExecution({ runId: "run-fence-4", runtimeExecution: { backend: "x" }, startedAt: "2026-06-03T18:01:00.000Z", dispatchId: "not-the-real-dispatch-id" });
+      expect(ok).toBe(false);
+    });
+
+    it("a ghost subprocess from a stale-marked, then retried, attempt cannot clobber the re-claimed run", async () => {
+      // Simulates the exact COR-1 race: sweeper marks a still-alive run FAILED,
+      // an operator retries it (fresh dispatch_id, back to QUEUED), it's
+      // re-claimed (another fresh dispatch_id) -- and the original ghost
+      // subprocess, still carrying the very first dispatch_id, finally
+      // completes and must not be able to overwrite the new attempt.
+      await store.createRun(makeRun({ runId: "run-ghost-1" }));
+      const firstClaim = await store.claimRun({ runId: "run-ghost-1", startedAt: "2026-06-03T18:01:00.000Z" });
+
+      // Sweeper force-fails the still-running attempt.
+      await store.markFailed({ runId: "run-ghost-1", endedAt: "2026-06-03T18:05:00.000Z", error: { code: "STALE_RUNNING" } });
+
+      // Operator retries: back to QUEUED (dispatch_id value here doesn't matter,
+      // since claimRun always mints a fresh one on the next claim).
+      await store.transition({ runId: "run-ghost-1", fromStates: ["FAILED"], set: { state: "QUEUED", attempt: 2 } });
+
+      // Re-claimed: a new dispatch_id, distinct from the first claim's.
+      const secondClaim = await store.claimRun({ runId: "run-ghost-1", startedAt: "2026-06-03T18:06:00.000Z" });
+      expect(secondClaim.dispatchId).not.toBe(firstClaim.dispatchId);
+
+      // The original ghost subprocess finally finishes, still carrying the
+      // FIRST dispatch_id -- must be rejected, not silently accepted.
+      const ghostSucceeded = await store.markSucceeded({
+        runId: "run-ghost-1",
+        endedAt: "2026-06-03T18:07:00.000Z",
+        result: { fromGhost: true },
+        dispatchId: firstClaim.dispatchId
+      });
+      expect(ghostSucceeded).toBe(false);
+
+      const runAfterGhost = await store.getRun("run-ghost-1");
+      expect(runAfterGhost.state).toBe("RUNNING");
+      expect(runAfterGhost.result).toBeNull();
+
+      // The real, currently-claimed attempt can still complete correctly.
+      const realSucceeded = await store.markSucceeded({
+        runId: "run-ghost-1",
+        endedAt: "2026-06-03T18:08:00.000Z",
+        result: { fromGhost: false },
+        dispatchId: secondClaim.dispatchId
+      });
+      expect(realSucceeded).toBe(true);
+      const finalRun = await store.getRun("run-ghost-1");
+      expect(finalRun.state).toBe("SUCCEEDED");
+      expect(finalRun.result).toEqual({ fromGhost: false });
+    });
   });
 });

@@ -59,6 +59,22 @@ describe("WorkerServiceRuntimeLauncher", () => {
     expect(workerCall[1].headers.Authorization).toBe(`Bearer ${TOKEN}`);
   });
 
+  it("forwards dispatchId in the /execute POST body (COR-1)", async () => {
+    const fetchImpl = makeFetch();
+    const launcher = new WorkerServiceRuntimeLauncher({
+      workerUrl: WORKER_URL,
+      runtimeServiceAccount: SERVICE_ACCOUNT,
+      fetchImpl,
+      now: () => new Date("2026-07-12T10:00:00.000Z")
+    });
+
+    await launcher.launchExecution({ runId: "run-1", dispatchId: "dispatch-abc", execution: EXECUTION, context: CONTEXT });
+
+    const workerCall = fetchImpl.mock.calls.find(c => String(c[0]).includes("/execute"));
+    const body = JSON.parse(workerCall[1].body);
+    expect(body).toEqual({ runId: "run-1", dispatchId: "dispatch-abc", execution: EXECUTION, context: CONTEXT });
+  });
+
   it("fetches OIDC token from metadata server with correct audience", async () => {
     const fetchImpl = makeFetch();
     const launcher = new WorkerServiceRuntimeLauncher({
